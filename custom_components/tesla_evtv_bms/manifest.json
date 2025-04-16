@@ -1,0 +1,11 @@
+{
+  "domain": "tesla_evtv_bms",
+  "name": "Tesla EVTV BMS",
+  "version": "1.0.0",
+  "documentation": "https://github.com/wreuvers/tesla_evtv_bms",
+  "dependencies": [],
+  "codeowners": ["@wreuvers"],
+  "requirements": [],
+  "iot_class": "local_polling",
+  "config_flow": true
+}

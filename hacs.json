@@ -1,0 +1,8 @@
+{
+  "name": "Tesla EVTV BMS",
+  "content_in_root": false,
+  "domain": "tesla_evtv_bms",
+  "country": "US",
+  "homeassistant": "2023.0.0",
+  "render_readme": true
+}
