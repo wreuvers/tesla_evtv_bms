@@ -3,3 +3,6 @@ PLATFORMS = ["sensor"]
 
 CONF_NAME = "name"
 CONF_PORT = "port"
+
+SIGNAL_UPDATE_ENTITY = f"{DOMAIN}_{{}}_update"
+
