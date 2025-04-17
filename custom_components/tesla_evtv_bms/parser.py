@@ -1,3 +1,6 @@
+import logging
+_LOGGER = logging.getLogger(__name__)
+
 def parse_udp_packet(payload: bytes, port: int) -> dict:
     if len(payload) < 12:
         return None
