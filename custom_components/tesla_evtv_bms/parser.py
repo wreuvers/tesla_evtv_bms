@@ -2,12 +2,17 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 def parse_udp_packet(payload: bytes, port: int) -> dict:
+    _LOGGER.debug(f"[tesla_evtv_bms] Received UDP payload on port {port}: {payload.hex()} (length={len(payload)})")
+
     if len(payload) < 12:
+        _LOGGER.warning(f"[tesla_evtv_bms] Ignored short packet on port {port} (length={len(payload)})")
         return None
 
     can_id = payload[8] + (payload[9] << 8) + (payload[10] << 16) + (payload[11] << 24)
+    _LOGGER.debug(f"[tesla_evtv_bms] Parsed CAN ID: {hex(can_id)}")
 
     if can_id not in [0x150, 0x151, 0x650, 0x651, 0x683]:
+        _LOGGER.debug(f"[tesla_evtv_bms] Ignored unrecognized CAN ID: {hex(can_id)}")
         return None
 
     def u16(b0, b1): return b0 + (b1 << 8)
