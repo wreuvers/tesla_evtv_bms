@@ -22,6 +22,21 @@ SENSOR_TYPES = {
     "raw_current": "A"
 }
 
+ICON_MAP = {
+    "state_of_charge": "mdi:battery",
+    "power": "mdi:flash",
+    "current": "mdi:current-dc",
+    "volts": "mdi:car-battery",
+    "lowest_cell": "mdi:battery-low",
+    "highest_cell": "mdi:battery-high",
+    "average_cell": "mdi:battery-medium",
+    "max_cells": "mdi:grid",
+    "active_cells": "mdi:checkbox-multiple-marked-circle",
+    "freq_shift_volts": "mdi:waveform",
+    "tcch_amps": "mdi:current-ac",
+    "raw_current": "mdi:flash"
+}
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     name = entry.data["name"].lower()
     coordinator = hass.data.setdefault(DOMAIN, {}).setdefault(name, {
@@ -71,6 +86,33 @@ class TeslaEvtvSensor(Entity):
     @property
     def unit_of_measurement(self):
         return self._unit
+
+    @property
+    def icon(self):
+        if self._key == "state_of_charge":
+            if self._state is not None:
+                soc = float(self._state)
+                if soc >= 90:
+                    return "mdi:battery"
+                elif soc >= 80:
+                    return "mdi:battery-90"
+                elif soc >= 70:
+                    return "mdi:battery-80"
+                elif soc >= 60:
+                    return "mdi:battery-70"
+                elif soc >= 50:
+                    return "mdi:battery-60"
+                elif soc >= 40:
+                    return "mdi:battery-50"
+                elif soc >= 30:
+                    return "mdi:battery-40"
+                elif soc >= 20:
+                    return "mdi:battery-30"
+                elif soc >= 10:
+                    return "mdi:battery-20"
+                else:
+                    return "mdi:battery-alert"
+        return ICON_MAP.get(self._key, "mdi:chip")
 
     @property
     def device_info(self):
