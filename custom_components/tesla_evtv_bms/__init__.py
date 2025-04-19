@@ -24,9 +24,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if DOMAIN not in hass.data:
         hass.data[DOMAIN] = {}
 
+    # 🛠 FIX: Add "config" to coordinator so sensor.py doesn't break
     hass.data[DOMAIN][name_lower] = {
         "entities": {},
-        "values": {}
+        "values": {},
+        "config": {
+            "pack_size": entry.data.get("pack_size", 22.0),
+            "cells_in_series": entry.data.get("cells_in_series", 96),
+            "min_cell_volts": entry.data.get("min_cell_volts", 3.0),
+            "max_cell_volts": entry.data.get("max_cell_volts", 4.2),
+        }
     }
 
     def udp_callback(sock):
