@@ -6,7 +6,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from .const import DOMAIN, SIGNAL_UPDATE_ENTITY
 
-# Define expected sensor types and their units
 SENSOR_TYPES = {
     "state_of_charge": "%",
     "power": "W",
@@ -19,7 +18,11 @@ SENSOR_TYPES = {
     "active_cells": "",
     "freq_shift_volts": "V",
     "tcch_amps": "A",
-    "raw_current": "A"
+    "raw_current": "A",
+    "battery_pack_energy": "kWh",
+    "battery_status": "",
+    "consumption": "W",
+    "production": "W",
 }
 
 ICON_MAP = {
@@ -34,14 +37,26 @@ ICON_MAP = {
     "active_cells": "mdi:checkbox-multiple-marked-circle",
     "freq_shift_volts": "mdi:waveform",
     "tcch_amps": "mdi:current-ac",
-    "raw_current": "mdi:flash"
+    "raw_current": "mdi:flash",
+    "battery_pack_energy": "mdi:battery-charging-70",
+    "battery_status": "mdi:battery-clock",
+    "consumption": "mdi:transmission-tower-import",
+    "production": "mdi:transmission-tower-export",
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     name = entry.data["name"].lower()
+    pack_config = {
+        "pack_size": entry.data.get("pack_size", 22.0),
+        "cells_in_series": entry.data.get("cells_in_series", 96),
+        "min_cell_volts": entry.data.get("min_cell_volts", 3.0),
+        "max_cell_volts": entry.data.get("max_cell_volts", 4.2),
+    }
+
     coordinator = hass.data.setdefault(DOMAIN, {}).setdefault(name, {
         "entities": {},
-        "values": {}
+        "values": {},
+        "config": pack_config
     })
 
     async def add_or_update_entity(key):
@@ -53,13 +68,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     async def handle_update(updated_values):
         coordinator["values"].update(updated_values)
-        for key in updated_values:
+
+        # Add computed values
+        soc = updated_values.get("state_of_charge")
+        power = updated_values.get("power")
+        current = updated_values.get("current")
+        config = coordinator["config"]
+        pack_size = config["pack_size"]
+
+        if soc is not None:
+            coordinator["values"]["battery_pack_energy"] = round(pack_size * soc / 100, 2)
+
+        if current is not None:
+            if current > 1:
+                coordinator["values"]["battery_status"] = "Charging"
+            elif current < -1:
+                coordinator["values"]["battery_status"] = "Discharging"
+            else:
+                coordinator["values"]["battery_status"] = "Idle"
+
+        if power is not None:
+            coordinator["values"]["production"] = power if power > 0 else 0
+            coordinator["values"]["consumption"] = abs(power) if power < 0 else 0
+
+        for key in coordinator["values"]:
             await add_or_update_entity(key)
 
     hass.helpers.dispatcher.async_dispatcher_connect(
         SIGNAL_UPDATE_ENTITY.format(name),
         handle_update
     )
+
 
 class TeslaEvtvSensor(Entity):
     def __init__(self, device_name, key, unit, coordinator):
