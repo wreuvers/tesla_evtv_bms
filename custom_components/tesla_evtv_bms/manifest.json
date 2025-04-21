@@ -1,14 +1,11 @@
 {
   "domain": "tesla_evtv_bms",
   "name": "Tesla EVTV BMS",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "documentation": "https://github.com/wreuvers/tesla_evtv_bms",
   "issue_tracker": "https://github.com/wreuvers/tesla_evtv_bms/issues",
-  "requirements": [],
   "dependencies": [],
   "codeowners": ["@wreuvers"],
-  "config_flow": true,
-  "iot_class": "local_push",
-  "icon": "mdi:car-battery",
-  "branding": "tesla_evtv_bms"
+  "requirements": [],
+  "iot_class": "local_push"
 }
