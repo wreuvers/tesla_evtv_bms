@@ -1,5 +1,3 @@
-# sensor.py - Final Version with Raw Current Hidden, Cell Difference, Trigger Cell Voltage
-
 import time
 from datetime import timedelta
 
@@ -24,14 +22,14 @@ SENSOR_TYPES = {
     "active_cells": "",
     "freq_shift_volts": "V",
     "tcch_amps": "A",
-    "battery_pack_energy": "kWh",
     "battery_status": "",
     "consumption": "W",
     "production": "W",
     "consumption_energy": "kWh",
     "production_energy": "kWh",
+    "available_energy": "kWh",
     "cell_difference": "V",
-    "trigger_cell_voltage": "V"
+    "trigger_cell_voltage": "V",
 }
 
 ICON_MAP = {
@@ -46,14 +44,13 @@ ICON_MAP = {
     "active_cells": "mdi:checkbox-multiple-marked-circle",
     "freq_shift_volts": "mdi:waveform",
     "tcch_amps": "mdi:current-ac",
-    "battery_pack_energy": "mdi:battery-charging-70",
-    "battery_status": "mdi:battery-clock",
     "consumption": "mdi:transmission-tower-import",
     "production": "mdi:transmission-tower-export",
     "consumption_energy": "mdi:transmission-tower-import",
     "production_energy": "mdi:transmission-tower-export",
+    "available_energy": "mdi:battery-charging-70",
     "cell_difference": "mdi:arrow-expand-vertical",
-    "trigger_cell_voltage": "mdi:transmission-tower"
+    "trigger_cell_voltage": "mdi:transmission-tower",
 }
 
 UTILITY_METER_PERIODS = {
@@ -78,10 +75,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     coordinator = hass.data.setdefault(DOMAIN, {}).setdefault(name, {
         "entities": {},
         "values": {},
-        "config": pack_config
+        "config": pack_config,
     })
 
     async def add_sensor_entity(key, unit):
+        if key.endswith(("_hour", "_day", "_week", "_month", "_year")):
+            unit = "kWh"
         if key not in coordinator["entities"]:
             sensor = TeslaEvtvSensor(name, key, unit, coordinator)
             coordinator["entities"][key] = sensor
@@ -98,7 +97,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 "last_update": time.monotonic()
             }
 
-        # Exclude raw_current
         if "raw_current" in values:
             del values["raw_current"]
 
@@ -111,7 +109,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         pack_size = config["pack_size"]
 
         if soc is not None:
-            coordinator["values"]["battery_pack_energy"] = round(pack_size * soc / 100, 2)
+            try:
+                coordinator["values"]["available_energy"] = round(pack_size * soc / 100, 2)
+            except Exception:
+                pass
 
         if current is not None:
             if current > 1:
@@ -137,7 +138,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             coordinator["values"]["production_energy"] = round(coordinator["energy"]["production"], 3)
             coordinator["values"]["consumption_energy"] = round(coordinator["energy"]["consumption"], 3)
 
-        # ➕ Add calculated sensors:
         if all(k in coordinator["values"] for k in ("highest_cell", "lowest_cell")):
             coordinator["values"]["cell_difference"] = round(
                 coordinator["values"]["highest_cell"] - coordinator["values"]["lowest_cell"], 4
@@ -204,24 +204,26 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def icon(self):
-        if self._key == "state_of_charge" and self.state is not None:
-            soc = float(self.state)
-            thresholds = [90, 80, 70, 60, 50, 40, 30, 20, 10]
-            icons = [
-                "mdi:battery",
-                "mdi:battery-90",
-                "mdi:battery-80",
-                "mdi:battery-70",
-                "mdi:battery-60",
-                "mdi:battery-50",
-                "mdi:battery-40",
-                "mdi:battery-30",
-                "mdi:battery-20",
-                "mdi:battery-alert"
-            ]
-            for i, threshold in enumerate(thresholds):
+        soc = self.state
+        if self._key == "state_of_charge" and soc is not None:
+            soc = float(soc)
+            for threshold, icon in zip(
+                [90, 80, 70, 60, 50, 40, 30, 20, 10],
+                [
+                    "mdi:battery",
+                    "mdi:battery-90",
+                    "mdi:battery-80",
+                    "mdi:battery-70",
+                    "mdi:battery-60",
+                    "mdi:battery-50",
+                    "mdi:battery-40",
+                    "mdi:battery-30",
+                    "mdi:battery-20",
+                    "mdi:battery-alert",
+                ],
+            ):
                 if soc >= threshold:
-                    return icons[i]
+                    return icon
         return ICON_MAP.get(self._key, "mdi:chip")
 
     @property
@@ -237,7 +239,7 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def device_class(self):
-        if self._key.endswith("_energy"):
+        if self._key.endswith("_energy") or self._key in ("available_energy",):
             return "energy"
         if self._key in ("volts", "lowest_cell", "highest_cell", "average_cell", "cell_difference", "trigger_cell_voltage"):
             return "voltage"
@@ -249,7 +251,7 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def state_class(self):
-        if self._key.endswith("_energy"):
+        if self._key.endswith("_energy") or self._key in ("available_energy",):
             return "total_increasing"
         if self._key in ("power", "volts", "current", "state_of_charge", "cell_difference", "trigger_cell_voltage"):
             return "measurement"
