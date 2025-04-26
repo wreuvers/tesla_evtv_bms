@@ -24,7 +24,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if DOMAIN not in hass.data:
         hass.data[DOMAIN] = {}
 
-    # 🛠 FIX: Add "config" to coordinator so sensor.py doesn't break
     hass.data[DOMAIN][name_lower] = {
         "entities": {},
         "values": {},
@@ -41,10 +40,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data, _ = sock.recvfrom(1024)
             parsed = parse_udp_packet(data, port)
             if parsed:
+                name_data = hass.data[DOMAIN][name_lower]
+                previous_values = name_data.get("values", {})
+                merged_values = {**previous_values, **parsed}
+
                 async_dispatcher_send(
                     hass,
                     SIGNAL_UPDATE_ENTITY.format(name_lower),
-                    parsed
+                    merged_values
                 )
         except BlockingIOError:
             pass
