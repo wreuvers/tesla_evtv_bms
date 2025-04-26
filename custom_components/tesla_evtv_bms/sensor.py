@@ -37,7 +37,30 @@ SENSOR_TYPES = {
     "hours_to_full": "h",
 }
 
-ICON_MAP = SENSOR_TYPES
+ICON_MAP = {
+    "state_of_charge": "mdi:battery",
+    "power": "mdi:flash",
+    "current": "mdi:current-dc",
+    "volts": "mdi:car-battery",
+    "lowest_cell": "mdi:battery-low",
+    "highest_cell": "mdi:battery-high",
+    "average_cell": "mdi:battery-medium",
+    "max_cells": "mdi:grid",
+    "active_cells": "mdi:checkbox-multiple-marked-circle",
+    "freq_shift_volts": "mdi:waveform",
+    "tcch_amps": "mdi:current-ac",
+    "charge": "mdi:transmission-tower-import",
+    "discharge": "mdi:transmission-tower-export",
+    "charge_energy": "mdi:transmission-tower-import",
+    "discharge_energy": "mdi:transmission-tower-export",
+    "available_energy": "mdi:battery-charging-70",
+    "cell_difference": "mdi:arrow-expand-vertical",
+    "trigger_cell_voltage": "mdi:transmission-tower",
+    "power_average": "mdi:chart-line",
+    "power_hourly_average": "mdi:chart-timeline-variant",
+    "hours_to_empty": "mdi:battery-alert",
+    "hours_to_full": "mdi:battery-clock",
+}
 
 UTILITY_METER_PERIODS = {
     "hour": timedelta(hours=1),
@@ -183,13 +206,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 available_energy = coordinator["values"].get("available_energy", 0)
                 pack_size = coordinator["config"]["pack_size"]
 
-                if avg > 0:
+                if abs(avg) > 0:
                     if status == "Discharging":
-                        coordinator["values"]["hours_to_empty"] = round(available_energy / (avg / 1000), 2)
+                        coordinator["values"]["hours_to_empty"] = round(available_energy / (abs(avg) / 1000), 2)
                         coordinator["values"]["hours_to_full"] = 0
                     elif status == "Charging":
                         coordinator["values"]["hours_to_empty"] = 0
-                        coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (avg / 1000), 2)
+                        coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (abs(avg) / 1000), 2)
                     else:
                         coordinator["values"]["hours_to_empty"] = 0
                         coordinator["values"]["hours_to_full"] = 0
@@ -234,6 +257,26 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def icon(self):
+        soc = self.state
+        if self._key == "state_of_charge" and soc is not None:
+            soc = float(soc)
+            for threshold, icon in zip(
+                [90, 80, 70, 60, 50, 40, 30, 20, 10],
+                [
+                    "mdi:battery",
+                    "mdi:battery-90",
+                    "mdi:battery-80",
+                    "mdi:battery-70",
+                    "mdi:battery-60",
+                    "mdi:battery-50",
+                    "mdi:battery-40",
+                    "mdi:battery-30",
+                    "mdi:battery-20",
+                    "mdi:battery-alert",
+                ],
+            ):
+                if soc >= threshold:
+                    return icon
         return ICON_MAP.get(self._key, "mdi:chip")
 
     @property
