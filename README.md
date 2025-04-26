@@ -4,9 +4,11 @@ This custom integration for Home Assistant listens to a UDP port and decodes Tes
 
 ## Features
 
-- Pack name and port configuration via UI
+- Pack name and port and detail configuration via UI
 - Real-time UDP listener
 - Sensors for voltage, current, SoC, power, cell stats, charge/discharge info
+- Utility sensor for Charge and Discharge by Hour, Day, Week, Month, Year
+- Trigger Cell to make everything safe :)
 - Lightweight and local
 
 ## Installation (HACS)
