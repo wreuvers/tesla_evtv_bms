@@ -31,28 +31,13 @@ SENSOR_TYPES = {
     "available_energy": "kWh",
     "cell_difference": "V",
     "trigger_cell_voltage": "V",
+    "power_average": "W",
+    "power_hourly_average": "W",
+    "hours_to_empty": "h",
+    "hours_to_full": "h",
 }
 
-ICON_MAP = {
-    "state_of_charge": "mdi:battery",
-    "power": "mdi:flash",
-    "current": "mdi:current-dc",
-    "volts": "mdi:car-battery",
-    "lowest_cell": "mdi:battery-low",
-    "highest_cell": "mdi:battery-high",
-    "average_cell": "mdi:battery-medium",
-    "max_cells": "mdi:grid",
-    "active_cells": "mdi:checkbox-multiple-marked-circle",
-    "freq_shift_volts": "mdi:waveform",
-    "tcch_amps": "mdi:current-ac",
-    "charge": "mdi:transmission-tower-import",
-    "discharge": "mdi:transmission-tower-export",
-    "charge_energy": "mdi:transmission-tower-import",
-    "discharge_energy": "mdi:transmission-tower-export",
-    "available_energy": "mdi:battery-charging-70",
-    "cell_difference": "mdi:arrow-expand-vertical",
-    "trigger_cell_voltage": "mdi:transmission-tower",
-}
+ICON_MAP = SENSOR_TYPES
 
 UTILITY_METER_PERIODS = {
     "hour": timedelta(hours=1),
@@ -60,6 +45,11 @@ UTILITY_METER_PERIODS = {
     "week": timedelta(weeks=1),
     "month": timedelta(days=30),
     "year": timedelta(days=365),
+}
+
+ROLLING_POWER_SAMPLES = {
+    "10min": {"interval": timedelta(minutes=1), "window": 10, "samples": []},
+    "hour": {"interval": timedelta(minutes=5), "window": 12, "samples": []},
 }
 
 
@@ -164,11 +154,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             coordinator[f"{meter_key}_last_value"] = coordinator["values"].get(base_key, 0.0)
 
             async def reset_and_start_meter(now, key=meter_key, base=base_key):
-                # Reset the meter at the start of each period
                 coordinator["values"][key] = 0.0
                 coordinator[f"{key}_last_value"] = coordinator["values"].get(base, 0.0)
-
-                # Force the entity to update its state
                 if key in coordinator["entities"]:
                     coordinator["entities"][key].async_schedule_update_ha_state()
 
@@ -176,6 +163,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     create_utility_updater("discharge_energy")
     create_utility_updater("charge_energy")
+
+    def track_rolling_averages(interval_key):
+        interval_info = ROLLING_POWER_SAMPLES[interval_key]
+
+        async def updater(now):
+            power = coordinator["values"].get("power")
+            if power is not None:
+                interval_info["samples"].append(power)
+                if len(interval_info["samples"]) > interval_info["window"]:
+                    interval_info["samples"].pop(0)
+
+                avg = sum(interval_info["samples"]) / len(interval_info["samples"])
+                key_name = "power_average" if interval_key == "10min" else "power_hourly_average"
+                coordinator["values"][key_name] = round(avg, 1)
+                await add_sensor_entity(key_name, "W")
+
+                status = coordinator["values"].get("battery_status", "")
+                available_energy = coordinator["values"].get("available_energy", 0)
+                pack_size = coordinator["config"]["pack_size"]
+
+                if avg > 0:
+                    if status == "Discharging":
+                        coordinator["values"]["hours_to_empty"] = round(available_energy / (avg / 1000), 2)
+                        coordinator["values"]["hours_to_full"] = 0
+                    elif status == "Charging":
+                        coordinator["values"]["hours_to_empty"] = 0
+                        coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (avg / 1000), 2)
+                    else:
+                        coordinator["values"]["hours_to_empty"] = 0
+                        coordinator["values"]["hours_to_full"] = 0
+                else:
+                    coordinator["values"]["hours_to_empty"] = 0
+                    coordinator["values"]["hours_to_full"] = 0
+
+                await add_sensor_entity("hours_to_empty", "h")
+                await add_sensor_entity("hours_to_full", "h")
+
+        async_track_time_interval(hass, updater, interval_info["interval"])
+
+    track_rolling_averages("10min")
+    track_rolling_averages("hour")
 
 
 class TeslaEvtvSensor(RestoreEntity):
@@ -206,26 +234,6 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def icon(self):
-        soc = self.state
-        if self._key == "state_of_charge" and soc is not None:
-            soc = float(soc)
-            for threshold, icon in zip(
-                [90, 80, 70, 60, 50, 40, 30, 20, 10],
-                [
-                    "mdi:battery",
-                    "mdi:battery-90",
-                    "mdi:battery-80",
-                    "mdi:battery-70",
-                    "mdi:battery-60",
-                    "mdi:battery-50",
-                    "mdi:battery-40",
-                    "mdi:battery-30",
-                    "mdi:battery-20",
-                    "mdi:battery-alert",
-                ],
-            ):
-                if soc >= threshold:
-                    return icon
         return ICON_MAP.get(self._key, "mdi:chip")
 
     @property
@@ -255,7 +263,7 @@ class TeslaEvtvSensor(RestoreEntity):
     def state_class(self):
         if self._key.endswith("_energy") or self._key in ("available_energy",):
             return "total_increasing"
-        if self._key in ("power", "volts", "current", "state_of_charge", "cell_difference", "trigger_cell_voltage"):
+        if self._key in ("power", "volts", "current", "state_of_charge", "cell_difference", "trigger_cell_voltage", "power_average", "power_hourly_average", "hours_to_empty", "hours_to_full"):
             return "measurement"
         return None
 
