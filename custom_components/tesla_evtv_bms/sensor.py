@@ -11,6 +11,11 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN, SIGNAL_UPDATE_ENTITY
 
+ROLLING_AVERAGE_INTERVALS = {
+    "power_average": {"interval": timedelta(minutes=1), "window": 10, "samples": []},
+    "power_hourly_average": {"interval": timedelta(minutes=5), "window": 12, "samples": []},
+}
+
 SENSOR_TYPES = {
     "state_of_charge": "%",
     "power": "W",
@@ -35,6 +40,7 @@ SENSOR_TYPES = {
     "power_hourly_average": "W",
     "hours_to_empty": "h",
     "hours_to_full": "h",
+    "summary": "",
 }
 
 ICON_MAP = {
@@ -60,6 +66,7 @@ ICON_MAP = {
     "power_hourly_average": "mdi:chart-timeline-variant",
     "hours_to_empty": "mdi:battery-alert",
     "hours_to_full": "mdi:battery-clock",
+    "summary": "mdi:clock-outline",
 }
 
 UTILITY_METER_PERIODS = {
@@ -68,11 +75,6 @@ UTILITY_METER_PERIODS = {
     "week": timedelta(weeks=1),
     "month": timedelta(days=30),
     "year": timedelta(days=365),
-}
-
-ROLLING_POWER_SAMPLES = {
-    "10min": {"interval": timedelta(minutes=1), "window": 10, "samples": []},
-    "hour": {"interval": timedelta(minutes=5), "window": 12, "samples": []},
 }
 
 
@@ -93,8 +95,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     })
 
     async def add_sensor_entity(key, unit):
-        if key.endswith(("_hour", "_day", "_week", "_month", "_year")):
-            unit = "kWh"
         if key not in coordinator["entities"]:
             sensor = TeslaEvtvSensor(name, key, unit, coordinator)
             coordinator["entities"][key] = sensor
@@ -121,10 +121,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         pack_size = config["pack_size"]
 
         if soc is not None:
-            try:
-                v["available_energy"] = round(pack_size * soc / 100, 2)
-            except Exception:
-                pass
+            v["available_energy"] = round(pack_size * soc / 100, 2)
 
         if current is not None:
             if current > 1:
@@ -150,9 +147,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             v["discharge_energy"] = round(coordinator["energy"]["discharge"], 3)
             v["charge_energy"] = round(coordinator["energy"]["charge"], 3)
 
+        # Cell Difference
         if all(k in v for k in ("highest_cell", "lowest_cell")):
             v["cell_difference"] = round(v["highest_cell"] - v["lowest_cell"], 4)
 
+        # Trigger Cell Voltage
         if soc is not None:
             if soc >= 75 and "highest_cell" in v:
                 v["trigger_cell_voltage"] = v["highest_cell"]
@@ -188,7 +187,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     create_utility_updater("charge_energy")
 
     def track_rolling_averages(interval_key):
-        interval_info = ROLLING_POWER_SAMPLES[interval_key]
+        interval_info = ROLLING_AVERAGE_INTERVALS[interval_key]
 
         async def updater(now):
             power = coordinator["values"].get("power")
@@ -198,7 +197,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     interval_info["samples"].pop(0)
 
                 avg = sum(interval_info["samples"]) / len(interval_info["samples"])
-                key_name = "power_average" if interval_key == "10min" else "power_hourly_average"
+                key_name = interval_key
                 coordinator["values"][key_name] = round(avg, 1)
                 await add_sensor_entity(key_name, "W")
 
@@ -223,10 +222,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 await add_sensor_entity("hours_to_empty", "h")
                 await add_sensor_entity("hours_to_full", "h")
 
+                # Summary Sensor Logic
+                summary_value = "Idle"
+                if status == "Discharging":
+                    hrs = coordinator["values"]["hours_to_empty"]
+                    hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
+                    summary_value = f"{hrs_str} hrs to Empty"
+                elif status == "Charging":
+                    hrs = coordinator["values"]["hours_to_full"]
+                    hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
+                    summary_value = f"{hrs_str} hrs to Full"
+
+                coordinator["values"]["summary"] = summary_value
+                await add_sensor_entity("summary", "")
+
         async_track_time_interval(hass, updater, interval_info["interval"])
 
-    track_rolling_averages("10min")
-    track_rolling_averages("hour")
+    for key in ROLLING_AVERAGE_INTERVALS:
+        track_rolling_averages(key)
 
 
 class TeslaEvtvSensor(RestoreEntity):
