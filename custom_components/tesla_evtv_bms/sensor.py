@@ -1,5 +1,6 @@
 import time
 from datetime import timedelta
+from functools import partial
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -23,10 +24,10 @@ SENSOR_TYPES = {
     "freq_shift_volts": "V",
     "tcch_amps": "A",
     "battery_status": "",
-    "consumption": "W",
-    "production": "W",
-    "consumption_energy": "kWh",
-    "production_energy": "kWh",
+    "charge": "W",
+    "discharge": "W",
+    "charge_energy": "kWh",
+    "discharge_energy": "kWh",
     "available_energy": "kWh",
     "cell_difference": "V",
     "trigger_cell_voltage": "V",
@@ -44,10 +45,10 @@ ICON_MAP = {
     "active_cells": "mdi:checkbox-multiple-marked-circle",
     "freq_shift_volts": "mdi:waveform",
     "tcch_amps": "mdi:current-ac",
-    "consumption": "mdi:transmission-tower-import",
-    "production": "mdi:transmission-tower-export",
-    "consumption_energy": "mdi:transmission-tower-import",
-    "production_energy": "mdi:transmission-tower-export",
+    "charge": "mdi:transmission-tower-import",
+    "discharge": "mdi:transmission-tower-export",
+    "charge_energy": "mdi:transmission-tower-import",
+    "discharge_energy": "mdi:transmission-tower-export",
     "available_energy": "mdi:battery-charging-70",
     "cell_difference": "mdi:arrow-expand-vertical",
     "trigger_cell_voltage": "mdi:transmission-tower",
@@ -92,66 +93,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         if "energy" not in coordinator:
             coordinator["energy"] = {
-                "consumption": 0.0,
-                "production": 0.0,
+                "charge": 0.0,
+                "discharge": 0.0,
                 "last_update": time.monotonic()
             }
 
-        if "raw_current" in values:
-            del values["raw_current"]
-
         coordinator["values"].update(values)
 
-        soc = values.get("state_of_charge")
-        power = values.get("power")
-        current = values.get("current")
+        v = coordinator["values"]
         config = coordinator["config"]
+        soc = v.get("state_of_charge")
+        power = v.get("power")
+        current = v.get("current")
         pack_size = config["pack_size"]
 
         if soc is not None:
             try:
-                coordinator["values"]["available_energy"] = round(pack_size * soc / 100, 2)
+                v["available_energy"] = round(pack_size * soc / 100, 2)
             except Exception:
                 pass
 
         if current is not None:
             if current > 1:
-                coordinator["values"]["battery_status"] = "Charging"
+                v["battery_status"] = "Charging"
             elif current < -1:
-                coordinator["values"]["battery_status"] = "Discharging"
+                v["battery_status"] = "Discharging"
             else:
-                coordinator["values"]["battery_status"] = "Idle"
+                v["battery_status"] = "Idle"
 
         if power is not None:
-            coordinator["values"]["production"] = abs(power) if power < 0 else 0
-            coordinator["values"]["consumption"] = power if power > 0 else 0
+            v["discharge"] = abs(power) if power < 0 else 0
+            v["charge"] = power if power > 0 else 0
 
             now = time.monotonic()
             delta = now - coordinator["energy"]["last_update"]
             coordinator["energy"]["last_update"] = now
 
             if power < 0:
-                coordinator["energy"]["production"] += (abs(power) * delta / 3600) / 1000
+                coordinator["energy"]["discharge"] += (abs(power) * delta / 3600) / 1000
             elif power > 0:
-                coordinator["energy"]["consumption"] += (power * delta / 3600) / 1000
+                coordinator["energy"]["charge"] += (power * delta / 3600) / 1000
 
-            coordinator["values"]["production_energy"] = round(coordinator["energy"]["production"], 3)
-            coordinator["values"]["consumption_energy"] = round(coordinator["energy"]["consumption"], 3)
+            v["discharge_energy"] = round(coordinator["energy"]["discharge"], 3)
+            v["charge_energy"] = round(coordinator["energy"]["charge"], 3)
 
-        if all(k in coordinator["values"] for k in ("highest_cell", "lowest_cell")):
-            coordinator["values"]["cell_difference"] = round(
-                coordinator["values"]["highest_cell"] - coordinator["values"]["lowest_cell"], 4
-            )
+        if all(k in v for k in ("highest_cell", "lowest_cell")):
+            v["cell_difference"] = round(v["highest_cell"] - v["lowest_cell"], 4)
 
         if soc is not None:
-            if soc >= 75 and "highest_cell" in coordinator["values"]:
-                coordinator["values"]["trigger_cell_voltage"] = coordinator["values"]["highest_cell"]
-            elif soc <= 25 and "lowest_cell" in coordinator["values"]:
-                coordinator["values"]["trigger_cell_voltage"] = coordinator["values"]["lowest_cell"]
-            elif "average_cell" in coordinator["values"]:
-                coordinator["values"]["trigger_cell_voltage"] = coordinator["values"]["average_cell"]
+            if soc >= 75 and "highest_cell" in v:
+                v["trigger_cell_voltage"] = v["highest_cell"]
+            elif soc <= 25 and "lowest_cell" in v:
+                v["trigger_cell_voltage"] = v["lowest_cell"]
+            elif "average_cell" in v:
+                v["trigger_cell_voltage"] = v["average_cell"]
 
-        for key in coordinator["values"]:
+        for key in v:
             unit = SENSOR_TYPES.get(key, "")
             await add_sensor_entity(key, unit)
 
@@ -164,16 +161,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for label, interval in UTILITY_METER_PERIODS.items():
             meter_key = f"{base_key}_{label}"
             coordinator["values"][meter_key] = 0.0
+            coordinator[f"{meter_key}_last_value"] = coordinator["values"].get(base_key, 0.0)
 
-            async def update_utility_sensor(now, key=meter_key, base=base_key):
-                coordinator["values"][key] = coordinator["values"].get(base, 0.0)
-                if key not in coordinator["entities"]:
-                    await add_sensor_entity(key, "kWh")
+            async def reset_and_start_meter(now, key=meter_key, base=base_key):
+                # Reset the meter at the start of each period
+                coordinator["values"][key] = 0.0
+                coordinator[f"{key}_last_value"] = coordinator["values"].get(base, 0.0)
 
-            async_track_time_interval(hass, update_utility_sensor, interval)
+                # Force the entity to update its state
+                if key in coordinator["entities"]:
+                    coordinator["entities"][key].async_schedule_update_ha_state()
 
-    create_utility_updater("production_energy")
-    create_utility_updater("consumption_energy")
+            async_track_time_interval(hass, partial(reset_and_start_meter, key=meter_key, base=base_key), interval)
+
+    create_utility_updater("discharge_energy")
+    create_utility_updater("charge_energy")
 
 
 class TeslaEvtvSensor(RestoreEntity):
@@ -196,7 +198,7 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def state(self):
-        return self._state or self._coordinator["values"].get(self._key)
+        return self._coordinator["values"].get(self._key)
 
     @property
     def unit_of_measurement(self):
@@ -261,15 +263,14 @@ class TeslaEvtvSensor(RestoreEntity):
         old_state = await self.async_get_last_state()
         if old_state and old_state.state not in (None, "unknown", ""):
             try:
-                self._state = float(old_state.state)
+                self._coordinator["values"][self._key] = float(old_state.state)
             except ValueError:
-                self._state = old_state.state
+                self._coordinator["values"][self._key] = old_state.state
 
         async def handle_update(values):
             if self._key in values:
                 now = time.monotonic()
                 if now - self._last_update >= self._cooldown:
-                    self._state = values[self._key]
                     self._last_update = now
                     self.async_write_ha_state()
 
