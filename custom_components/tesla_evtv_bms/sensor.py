@@ -3,9 +3,9 @@ from datetime import timedelta
 from functools import partial
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 
@@ -76,7 +76,6 @@ UTILITY_METER_PERIODS = {
     "month": timedelta(days=30),
     "year": timedelta(days=365),
 }
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     name = entry.data["name"].lower()
@@ -164,7 +163,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             unit = SENSOR_TYPES.get(key, "")
             await add_sensor_entity(key, unit)
 
-    hass.helpers.dispatcher.async_dispatcher_connect(
+    async_dispatcher_connect(
+        hass,
         SIGNAL_UPDATE_ENTITY.format(name),
         handle_update
     )
@@ -240,7 +240,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     for key in ROLLING_AVERAGE_INTERVALS:
         track_rolling_averages(key)
-
 
 class TeslaEvtvSensor(RestoreEntity):
     def __init__(self, device_name, key, unit, coordinator):
