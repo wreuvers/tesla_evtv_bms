@@ -8,6 +8,7 @@ DEFAULT_CELLS_SERIES = 96
 DEFAULT_MIN_VOLTS = 3.2
 DEFAULT_MAX_VOLTS = 4.1
 
+
 class TeslaEVTVBMSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 

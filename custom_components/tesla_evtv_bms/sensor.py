@@ -186,22 +186,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             delta = now - coordinator["energy"]["last_update"]
             coordinator["energy"]["last_update"] = now
 
+            # Energy increment in kWh for this update interval
+            increment = (abs(power) * delta / 3600) / 1000
+
             if power < 0:
-                coordinator["energy"]["discharge"] += (abs(power) * delta / 3600) / 1000
+                coordinator["energy"]["discharge"] += increment
+                # Each period meter is its own accumulator. Reset at period
+                # boundaries; persisted across restarts via RestoreEntity.
+                for label in UTILITY_METER_PERIODS:
+                    mk = f"discharge_energy_{label}"
+                    v[mk] = round(v.get(mk, 0.0) + increment, 3)
             elif power > 0:
-                coordinator["energy"]["charge"] += (power * delta / 3600) / 1000
+                coordinator["energy"]["charge"] += increment
+                for label in UTILITY_METER_PERIODS:
+                    mk = f"charge_energy_{label}"
+                    v[mk] = round(v.get(mk, 0.0) + increment, 3)
 
             v["discharge_energy"] = round(coordinator["energy"]["discharge"], 3)
             v["charge_energy"] = round(coordinator["energy"]["charge"], 3)
-
-        # Period totals for utility meters (hour/day/week/month/year)
-        for base in ("discharge_energy", "charge_energy"):
-            if base in v:
-                base_val = v[base]
-                for label in UTILITY_METER_PERIODS:
-                    meter_key = f"{base}_{label}"
-                    last_val = coordinator.get(f"{meter_key}_last_value", 0.0)
-                    v[meter_key] = round(max(0.0, base_val - last_val), 3)
 
         # Cell Difference
         if all(k in v for k in ("highest_cell", "lowest_cell")):
@@ -227,34 +229,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     )
 
     def create_utility_updater(base_key):
-        # Initialize meter values and snapshot the current base value as the period start
+        # Each period meter is its own accumulator stored in coordinator["values"]
+        # so RestoreEntity will repopulate it on HA restart. Resets fire at
+        # wall-clock period boundaries.
         for label in UTILITY_METER_PERIODS:
-            meter_key = f"{base_key}_{label}"
-            coordinator["values"].setdefault(meter_key, 0.0)
-            coordinator.setdefault(
-                f"{meter_key}_last_value",
-                coordinator["values"].get(base_key, 0.0),
-            )
+            coordinator["values"].setdefault(f"{base_key}_{label}", 0.0)
 
-        async def reset_meter(meter_key, base):
-            # Snapshot the current cumulative base value, then zero the period meter
-            coordinator[f"{meter_key}_last_value"] = coordinator["values"].get(base, 0.0)
+        async def reset_meter(meter_key):
             coordinator["values"][meter_key] = 0.0
-            if meter_key in coordinator["entities"]:
-                coordinator["entities"][meter_key].async_schedule_update_ha_state()
+            entity = coordinator["entities"].get(meter_key)
+            if entity is not None:
+                entity.async_schedule_update_ha_state()
 
         async def hourly(now, base=base_key):
-            await reset_meter(f"{base}_hour", base)
+            await reset_meter(f"{base}_hour")
 
         async def daily(now, base=base_key):
             # Fires at 00:00 every day; week/month/year branches fire conditionally
-            await reset_meter(f"{base}_day", base)
+            await reset_meter(f"{base}_day")
             if now.weekday() == 0:  # Monday
-                await reset_meter(f"{base}_week", base)
+                await reset_meter(f"{base}_week")
             if now.day == 1:
-                await reset_meter(f"{base}_month", base)
+                await reset_meter(f"{base}_month")
                 if now.month == 1:
-                    await reset_meter(f"{base}_year", base)
+                    await reset_meter(f"{base}_year")
 
         async_track_time_change(hass, hourly, minute=0, second=0)
         async_track_time_change(hass, daily, hour=0, minute=0, second=0)
