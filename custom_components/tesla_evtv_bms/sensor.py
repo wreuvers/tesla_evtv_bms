@@ -7,7 +7,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_time_interval, async_track_time_change
 
 from .const import DOMAIN, SIGNAL_UPDATE_ENTITY
 
@@ -34,12 +34,36 @@ SENSOR_TYPES = {
     "charge_energy": "kWh",
     "discharge_energy": "kWh",
     "available_energy": "kWh",
+    "charge_energy_hour": "kWh",
+    "charge_energy_day": "kWh",
+    "charge_energy_week": "kWh",
+    "charge_energy_month": "kWh",
+    "charge_energy_year": "kWh",
+    "discharge_energy_hour": "kWh",
+    "discharge_energy_day": "kWh",
+    "discharge_energy_week": "kWh",
+    "discharge_energy_month": "kWh",
+    "discharge_energy_year": "kWh",
     "cell_difference": "V",
     "trigger_cell_voltage": "V",
     "power_average": "W",
     "power_hourly_average": "W",
     "hours_to_empty": "h",
     "hours_to_full": "h",
+    "lowest_temp": "°C",
+    "highest_temp": "°C",
+    "pack_ah_used": "Ah",
+    "high_voltage_cutoff": "V",
+    "low_voltage_cutoff": "V",
+    "contactor_negative": "",
+    "contactor_positive": "",
+    "charge_enable": "",
+    "heat_enable": "",
+    "power_source": "",
+    "fault_code": "",
+    "fault_status": "",
+    "total_modules": "",
+    "total_cells": "",
     "summary": "",
 }
 
@@ -60,12 +84,36 @@ ICON_MAP = {
     "charge_energy": "mdi:transmission-tower-import",
     "discharge_energy": "mdi:transmission-tower-export",
     "available_energy": "mdi:battery-charging-70",
+    "charge_energy_hour": "mdi:transmission-tower-import",
+    "charge_energy_day": "mdi:transmission-tower-import",
+    "charge_energy_week": "mdi:transmission-tower-import",
+    "charge_energy_month": "mdi:transmission-tower-import",
+    "charge_energy_year": "mdi:transmission-tower-import",
+    "discharge_energy_hour": "mdi:transmission-tower-export",
+    "discharge_energy_day": "mdi:transmission-tower-export",
+    "discharge_energy_week": "mdi:transmission-tower-export",
+    "discharge_energy_month": "mdi:transmission-tower-export",
+    "discharge_energy_year": "mdi:transmission-tower-export",
     "cell_difference": "mdi:arrow-expand-vertical",
     "trigger_cell_voltage": "mdi:transmission-tower",
     "power_average": "mdi:chart-line",
     "power_hourly_average": "mdi:chart-timeline-variant",
     "hours_to_empty": "mdi:battery-alert",
     "hours_to_full": "mdi:battery-clock",
+    "lowest_temp": "mdi:thermometer-low",
+    "highest_temp": "mdi:thermometer-high",
+    "pack_ah_used": "mdi:counter",
+    "high_voltage_cutoff": "mdi:arrow-up-bold-circle",
+    "low_voltage_cutoff": "mdi:arrow-down-bold-circle",
+    "contactor_negative": "mdi:electric-switch",
+    "contactor_positive": "mdi:electric-switch",
+    "charge_enable": "mdi:battery-plus-variant",
+    "heat_enable": "mdi:radiator",
+    "power_source": "mdi:power-plug",
+    "fault_code": "mdi:numeric",
+    "fault_status": "mdi:alert-circle",
+    "total_modules": "mdi:cube-outline",
+    "total_cells": "mdi:checkbox-multiple-marked-circle",
     "summary": "mdi:clock-outline",
 }
 
@@ -146,6 +194,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             v["discharge_energy"] = round(coordinator["energy"]["discharge"], 3)
             v["charge_energy"] = round(coordinator["energy"]["charge"], 3)
 
+        # Period totals for utility meters (hour/day/week/month/year)
+        for base in ("discharge_energy", "charge_energy"):
+            if base in v:
+                base_val = v[base]
+                for label in UTILITY_METER_PERIODS:
+                    meter_key = f"{base}_{label}"
+                    last_val = coordinator.get(f"{meter_key}_last_value", 0.0)
+                    v[meter_key] = round(max(0.0, base_val - last_val), 3)
+
         # Cell Difference
         if all(k in v for k in ("highest_cell", "lowest_cell")):
             v["cell_difference"] = round(v["highest_cell"] - v["lowest_cell"], 4)
@@ -170,18 +227,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     )
 
     def create_utility_updater(base_key):
-        for label, interval in UTILITY_METER_PERIODS.items():
+        # Initialize meter values and snapshot the current base value as the period start
+        for label in UTILITY_METER_PERIODS:
             meter_key = f"{base_key}_{label}"
+            coordinator["values"].setdefault(meter_key, 0.0)
+            coordinator.setdefault(
+                f"{meter_key}_last_value",
+                coordinator["values"].get(base_key, 0.0),
+            )
+
+        async def reset_meter(meter_key, base):
+            # Snapshot the current cumulative base value, then zero the period meter
+            coordinator[f"{meter_key}_last_value"] = coordinator["values"].get(base, 0.0)
             coordinator["values"][meter_key] = 0.0
-            coordinator[f"{meter_key}_last_value"] = coordinator["values"].get(base_key, 0.0)
+            if meter_key in coordinator["entities"]:
+                coordinator["entities"][meter_key].async_schedule_update_ha_state()
 
-            async def reset_and_start_meter(now, key=meter_key, base=base_key):
-                coordinator["values"][key] = 0.0
-                coordinator[f"{key}_last_value"] = coordinator["values"].get(base, 0.0)
-                if key in coordinator["entities"]:
-                    coordinator["entities"][key].async_schedule_update_ha_state()
+        async def hourly(now, base=base_key):
+            await reset_meter(f"{base}_hour", base)
 
-            async_track_time_interval(hass, partial(reset_and_start_meter, key=meter_key, base=base_key), interval)
+        async def daily(now, base=base_key):
+            # Fires at 00:00 every day; week/month/year branches fire conditionally
+            await reset_meter(f"{base}_day", base)
+            if now.weekday() == 0:  # Monday
+                await reset_meter(f"{base}_week", base)
+            if now.day == 1:
+                await reset_meter(f"{base}_month", base)
+                if now.month == 1:
+                    await reset_meter(f"{base}_year", base)
+
+        async_track_time_change(hass, hourly, minute=0, second=0)
+        async_track_time_change(hass, daily, hour=0, minute=0, second=0)
 
     create_utility_updater("discharge_energy")
     create_utility_updater("charge_energy")
@@ -304,21 +380,23 @@ class TeslaEvtvSensor(RestoreEntity):
 
     @property
     def device_class(self):
-        if self._key.endswith("_energy") or self._key in ("available_energy",):
+        if self._key.endswith("_energy") or "_energy_" in self._key or self._key in ("available_energy",):
             return "energy"
-        if self._key in ("volts", "lowest_cell", "highest_cell", "average_cell", "cell_difference", "trigger_cell_voltage"):
+        if self._key in ("volts", "lowest_cell", "highest_cell", "average_cell", "cell_difference", "trigger_cell_voltage", "high_voltage_cutoff", "low_voltage_cutoff"):
             return "voltage"
         if self._key in ("current", "tcch_amps"):
             return "current"
         if self._key == "power":
             return "power"
+        if self._key in ("lowest_temp", "highest_temp"):
+            return "temperature"
         return None
 
     @property
     def state_class(self):
-        if self._key.endswith("_energy") or self._key in ("available_energy",):
+        if self._key.endswith("_energy") or "_energy_" in self._key or self._key in ("available_energy",):
             return "total_increasing"
-        if self._key in ("power", "volts", "current", "state_of_charge", "cell_difference", "trigger_cell_voltage", "power_average", "power_hourly_average", "hours_to_empty", "hours_to_full"):
+        if self._key in ("power", "volts", "current", "state_of_charge", "cell_difference", "trigger_cell_voltage", "power_average", "power_hourly_average", "hours_to_empty", "hours_to_full", "lowest_temp", "highest_temp", "pack_ah_used", "high_voltage_cutoff", "low_voltage_cutoff"):
             return "measurement"
         return None
 
