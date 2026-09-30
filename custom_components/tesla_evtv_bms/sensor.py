@@ -298,7 +298,6 @@ class TeslaEvtvSensor(RestoreEntity):
             "name": self._device,
             "manufacturer": "EVTV",
             "model": "Tesla BMS",
-            "entry_type": "service",
             "suggested_area": "Battery Storage"
         }
 

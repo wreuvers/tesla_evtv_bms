@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tesla EVTV BMS",
+        "description": "Configure the Tesla EVTV BMS UDP listener",
+        "data": {
+          "name": "Name",
+          "port": "UDP port",
+          "pack_size": "Pack size (kWh)",
+          "cells_in_series": "Cells in series",
+          "min_cell_volts": "Min cell volts",
+          "max_cell_volts": "Max cell volts",
+          "invert_current": "Invert current sign (use if charging shows negative)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tesla EVTV BMS options",
+        "data": {
+          "invert_current": "Invert current sign (use if charging shows negative)"
+        }
+      }
+    }
+  }
+}
