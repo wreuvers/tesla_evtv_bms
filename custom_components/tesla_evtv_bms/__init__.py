@@ -10,6 +10,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SIGNAL_UPDATE_ENTITY,
+    SIGNAL_OPTIONS_UPDATED,
     CONF_INVERT_CURRENT,
     DEFAULT_INVERT_CURRENT,
 )
@@ -98,8 +99,11 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         CONF_INVERT_CURRENT,
         entry.data.get(CONF_INVERT_CURRENT, DEFAULT_INVERT_CURRENT),
     ))
-    pack["config"]["invert_current"] = invert_current
-    _LOGGER.info("%s: invert_current set to %s", entry.data["name"], invert_current)
+    if pack["config"].get("invert_current") != invert_current:
+        pack["config"]["invert_current"] = invert_current
+        _LOGGER.info("%s: invert_current set to %s", entry.data["name"], invert_current)
+    # Let the Invert switch (and anything else) refresh its state.
+    async_dispatcher_send(hass, SIGNAL_OPTIONS_UPDATED.format(name_lower))
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     name_lower = entry.data["name"].lower()
@@ -107,6 +111,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         loop = asyncio.get_event_loop()
         loop.remove_reader(sock)
         sock.close()
-    await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     hass.data[DOMAIN].pop(name_lower, None)
-    return True
+    return unloaded

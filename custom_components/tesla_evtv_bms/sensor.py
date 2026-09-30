@@ -1,19 +1,44 @@
+"""Tesla EVTV BMS sensors.
+
+v1.3.6 changes (unique_ids / entity_ids unchanged):
+- Entities are SensorEntity/RestoreSensor (state_class & device_class now
+  actually reach HA; the old plain-Entity class never exposed state_class).
+- Charge/discharge energy: per pack, positive power -> charge kWh, negative ->
+  discharge kWh (left Riemann sum, gaps > 60 s skipped). Totals are
+  total_increasing and restored across restarts.
+- Charge/Discharge Hour/Day/Week/Month/Year meters actually accumulate now
+  (they were only ever reset to 0), reset on local-time calendar boundaries
+  (week starts Monday), state_class total with last_reset, restored across
+  restarts when the saved period is still current.
+- Rolling power averages / hours-to-full/empty are per pack (the sample
+  lists used to be one module-level pool shared by all packs).
+- Device is a normal device (not a Service), sw_version reported.
+- All listeners are released on unload.
+"""
+import logging
 import time
-from datetime import timedelta
-from functools import partial
+from datetime import datetime, timedelta
 
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SIGNAL_UPDATE_ENTITY
+from .const import DOMAIN, SIGNAL_UPDATE_ENTITY, pack_device_info
 
+_LOGGER = logging.getLogger(__name__)
+
+# key -> (interval, window)   samples are kept per pack in the coordinator
 ROLLING_AVERAGE_INTERVALS = {
-    "power_average": {"interval": timedelta(minutes=1), "window": 10, "samples": []},
-    "power_hourly_average": {"interval": timedelta(minutes=5), "window": 12, "samples": []},
+    "power_average": (timedelta(minutes=1), 10),
+    "power_hourly_average": (timedelta(minutes=5), 12),
 }
 
 SENSOR_TYPES = {
@@ -21,6 +46,7 @@ SENSOR_TYPES = {
     "power": "W",
     "current": "A",
     "volts": "V",
+    "raw_current": "",
     "lowest_cell": "V",
     "highest_cell": "V",
     "average_cell": "V",
@@ -69,16 +95,96 @@ ICON_MAP = {
     "summary": "mdi:clock-outline",
 }
 
-UTILITY_METER_PERIODS = {
-    "hour": timedelta(hours=1),
-    "day": timedelta(days=1),
-    "week": timedelta(weeks=1),
-    "month": timedelta(days=30),
-    "year": timedelta(days=365),
-}
+ENERGY_BASES = ("charge_energy", "discharge_energy")
+METER_PERIODS = ("hour", "day", "week", "month", "year")
+METER_KEYS = tuple(f"{b}_{p}" for b in ENERGY_BASES for p in METER_PERIODS)
+MAX_INTEGRATION_GAP_S = 60.0
+
+VOLTAGE_KEYS = ("volts", "lowest_cell", "highest_cell", "average_cell", "cell_difference",
+                "trigger_cell_voltage", "freq_shift_volts")
+POWER_KEYS = ("power", "charge", "discharge", "power_average", "power_hourly_average")
+MEASUREMENT_KEYS = VOLTAGE_KEYS + POWER_KEYS + (
+    "current", "tcch_amps", "state_of_charge", "available_energy", "hours_to_empty", "hours_to_full")
+TEXT_KEYS = ("battery_status", "summary")
+
+
+def period_start(period: str, now: datetime) -> datetime:
+    """Start of the local-time calendar period containing `now` (aware, local tz)."""
+    now = dt_util.as_local(now)
+    if period == "hour":
+        return now.replace(minute=0, second=0, microsecond=0)
+    today = now.date()
+    if period == "day":
+        return dt_util.start_of_local_day(today)
+    if period == "week":  # Monday, like HA utility_meter
+        return dt_util.start_of_local_day(today - timedelta(days=today.weekday()))
+    if period == "month":
+        return dt_util.start_of_local_day(today.replace(day=1))
+    if period == "year":
+        return dt_util.start_of_local_day(today.replace(month=1, day=1))
+    raise ValueError(period)
+
+
+def _new_coordinator_state(coordinator: dict) -> None:
+    """Per-pack runtime state (idempotent)."""
+    coordinator.setdefault("entities", {})
+    coordinator.setdefault("values", {})
+    coordinator.setdefault("energy", {
+        "charge_energy": 0.0,
+        "discharge_energy": 0.0,
+        "restored": set(),
+        "last_mono": None,
+        "last_power": None,
+    })
+    now = dt_util.now()
+    coordinator.setdefault("meters", {
+        key: {"value": 0.0, "last_reset": period_start(key.rsplit("_", 1)[1], now), "restored": False}
+        for key in METER_KEYS
+    })
+    coordinator.setdefault("rolling", {key: [] for key in ROLLING_AVERAGE_INTERVALS})
+
+
+def _roll_meter(coordinator: dict, key: str, now: datetime) -> bool:
+    """Reset meter if a calendar boundary was crossed. Returns True if reset."""
+    meter = coordinator["meters"][key]
+    start = period_start(key.rsplit("_", 1)[1], now)
+    if start != meter["last_reset"]:
+        meter["value"] = 0.0
+        meter["last_reset"] = start
+        coordinator["values"][key] = 0.0
+        return True
+    return False
+
+
+def _add_energy(coordinator: dict, base: str, kwh: float, now: datetime) -> None:
+    energy = coordinator["energy"]
+    v = coordinator["values"]
+    energy[base] += kwh
+    v[base] = round(energy[base], 3)
+    for period in METER_PERIODS:
+        key = f"{base}_{period}"
+        _roll_meter(coordinator, key, now)
+        meter = coordinator["meters"][key]
+        meter["value"] += kwh
+        v[key] = round(meter["value"], 3)
+
+
+def integrate_power(coordinator: dict, power, now_mono: float, now: datetime) -> None:
+    """Left-Riemann integration of W into kWh, split by sign. Per pack."""
+    energy = coordinator["energy"]
+    last_mono, last_power = energy["last_mono"], energy["last_power"]
+    if last_mono is not None and isinstance(last_power, (int, float)):
+        dt_s = now_mono - last_mono
+        if 0 < dt_s <= MAX_INTEGRATION_GAP_S and last_power != 0:
+            kwh = abs(last_power) * dt_s / 3_600_000
+            _add_energy(coordinator, "charge_energy" if last_power > 0 else "discharge_energy", kwh, now)
+    energy["last_mono"] = now_mono
+    energy["last_power"] = power if isinstance(power, (int, float)) else None
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     name = entry.data["name"].lower()
+    title = entry.data["name"]
 
     pack_config = {
         "pack_size": entry.data.get("pack_size", 22.0),
@@ -92,23 +198,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "values": {},
         "config": pack_config,
     })
+    _new_coordinator_state(coordinator)
+    device_info = pack_device_info(name, title)
+
+    def make_sensor(key):
+        cls = EnergyMeterSensor if key in METER_KEYS else TeslaEvtvSensor
+        return cls(name, key, SENSOR_TYPES.get(key, "kWh" if key in METER_KEYS else ""), coordinator, device_info)
+
+    # Create every known entity up front so restore happens before live data
+    # (energy totals/meters seed from their restored state).
+    initial = []
+    for key in list(SENSOR_TYPES) + list(METER_KEYS):
+        if key not in coordinator["entities"]:
+            sensor = make_sensor(key)
+            coordinator["entities"][key] = sensor
+            initial.append(sensor)
+    async_add_entities(initial)
 
     async def add_sensor_entity(key, unit):
         if key not in coordinator["entities"]:
-            sensor = TeslaEvtvSensor(name, key, unit, coordinator)
+            sensor = TeslaEvtvSensor(name, key, unit, coordinator, device_info)
             coordinator["entities"][key] = sensor
             async_add_entities([sensor])
 
     async def handle_update(values):
         if "config" not in coordinator:
             return
-
-        if "energy" not in coordinator:
-            coordinator["energy"] = {
-                "charge": 0.0,
-                "discharge": 0.0,
-                "last_update": time.monotonic()
-            }
 
         coordinator["values"].update(values)
 
@@ -119,10 +234,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         current = v.get("current")
         pack_size = config["pack_size"]
 
-        if soc is not None:
+        if isinstance(soc, (int, float)):
             v["available_energy"] = round(pack_size * soc / 100, 2)
 
-        if current is not None:
+        if isinstance(current, (int, float)):
             if current > 1:
                 v["battery_status"] = "Charging"
             elif current < -1:
@@ -130,28 +245,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             else:
                 v["battery_status"] = "Idle"
 
-        if power is not None:
+        if isinstance(power, (int, float)):
             v["discharge"] = abs(power) if power < 0 else 0
             v["charge"] = power if power > 0 else 0
-
-            now = time.monotonic()
-            delta = now - coordinator["energy"]["last_update"]
-            coordinator["energy"]["last_update"] = now
-
-            if power < 0:
-                coordinator["energy"]["discharge"] += (abs(power) * delta / 3600) / 1000
-            elif power > 0:
-                coordinator["energy"]["charge"] += (power * delta / 3600) / 1000
-
-            v["discharge_energy"] = round(coordinator["energy"]["discharge"], 3)
-            v["charge_energy"] = round(coordinator["energy"]["charge"], 3)
+        integrate_power(coordinator, power, time.monotonic(), dt_util.now())
 
         # Cell Difference
-        if all(k in v for k in ("highest_cell", "lowest_cell")):
+        if all(isinstance(v.get(k), (int, float)) for k in ("highest_cell", "lowest_cell")):
             v["cell_difference"] = round(v["highest_cell"] - v["lowest_cell"], 4)
 
         # Trigger Cell Voltage
-        if soc is not None:
+        if isinstance(soc, (int, float)):
             if soc >= 75 and "highest_cell" in v:
                 v["trigger_cell_voltage"] = v["highest_cell"]
             elif soc <= 25 and "lowest_cell" in v:
@@ -159,97 +263,99 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             elif "average_cell" in v:
                 v["trigger_cell_voltage"] = v["average_cell"]
 
-        for key in v:
-            unit = SENSOR_TYPES.get(key, "")
-            await add_sensor_entity(key, unit)
+        for key in list(v):
+            if key in SENSOR_TYPES or key in METER_KEYS:
+                continue
+            await add_sensor_entity(key, SENSOR_TYPES.get(key, ""))
 
-    async_dispatcher_connect(
-        hass,
-        SIGNAL_UPDATE_ENTITY.format(name),
-        handle_update
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_UPDATE_ENTITY.format(name), handle_update)
     )
 
-    def create_utility_updater(base_key):
-        for label, interval in UTILITY_METER_PERIODS.items():
-            meter_key = f"{base_key}_{label}"
-            coordinator["values"][meter_key] = 0.0
-            coordinator[f"{meter_key}_last_value"] = coordinator["values"].get(base_key, 0.0)
+    # Calendar resets even when no power data arrives (top of every local hour).
+    @callback
+    def _reset_meters(now):
+        for key in METER_KEYS:
+            if _roll_meter(coordinator, key, now):
+                ent = coordinator["entities"].get(key)
+                if ent is not None and ent.hass is not None:
+                    ent.async_write_ha_state()
 
-            async def reset_and_start_meter(now, key=meter_key, base=base_key):
-                coordinator["values"][key] = 0.0
-                coordinator[f"{key}_last_value"] = coordinator["values"].get(base, 0.0)
-                if key in coordinator["entities"]:
-                    coordinator["entities"][key].async_schedule_update_ha_state()
-
-            async_track_time_interval(hass, partial(reset_and_start_meter, key=meter_key, base=base_key), interval)
-
-    create_utility_updater("discharge_energy")
-    create_utility_updater("charge_energy")
+    entry.async_on_unload(async_track_time_change(hass, _reset_meters, minute=0, second=0))
 
     def track_rolling_averages(interval_key):
-        interval_info = ROLLING_AVERAGE_INTERVALS[interval_key]
+        interval, window = ROLLING_AVERAGE_INTERVALS[interval_key]
 
         async def updater(now):
             power = coordinator["values"].get("power")
-            if power is not None:
-                interval_info["samples"].append(power)
-                if len(interval_info["samples"]) > interval_info["window"]:
-                    interval_info["samples"].pop(0)
+            if not isinstance(power, (int, float)):
+                return
+            samples = coordinator["rolling"][interval_key]
+            samples.append(power)
+            if len(samples) > window:
+                samples.pop(0)
 
-                avg = sum(interval_info["samples"]) / len(interval_info["samples"])
-                key_name = interval_key
-                coordinator["values"][key_name] = round(avg, 1)
-                await add_sensor_entity(key_name, "W")
+            avg = sum(samples) / len(samples)
+            coordinator["values"][interval_key] = round(avg, 1)
 
-                status = coordinator["values"].get("battery_status", "")
-                available_energy = coordinator["values"].get("available_energy", 0)
-                pack_size = coordinator["config"]["pack_size"]
+            status = coordinator["values"].get("battery_status", "")
+            available_energy = coordinator["values"].get("available_energy", 0)
+            if not isinstance(available_energy, (int, float)):
+                available_energy = 0
+            pack_size = coordinator["config"]["pack_size"]
 
-                if abs(avg) > 0:
-                    if status == "Discharging":
-                        coordinator["values"]["hours_to_empty"] = round(available_energy / (abs(avg) / 1000), 2)
-                        coordinator["values"]["hours_to_full"] = 0
-                    elif status == "Charging":
-                        coordinator["values"]["hours_to_empty"] = 0
-                        coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (abs(avg) / 1000), 2)
-                    else:
-                        coordinator["values"]["hours_to_empty"] = 0
-                        coordinator["values"]["hours_to_full"] = 0
+            if abs(avg) > 0:
+                if status == "Discharging":
+                    coordinator["values"]["hours_to_empty"] = round(available_energy / (abs(avg) / 1000), 2)
+                    coordinator["values"]["hours_to_full"] = 0
+                elif status == "Charging":
+                    coordinator["values"]["hours_to_empty"] = 0
+                    coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (abs(avg) / 1000), 2)
                 else:
                     coordinator["values"]["hours_to_empty"] = 0
                     coordinator["values"]["hours_to_full"] = 0
+            else:
+                coordinator["values"]["hours_to_empty"] = 0
+                coordinator["values"]["hours_to_full"] = 0
 
-                await add_sensor_entity("hours_to_empty", "h")
-                await add_sensor_entity("hours_to_full", "h")
+            # Summary Sensor Logic
+            summary_value = "Idle"
+            if status == "Discharging":
+                hrs = coordinator["values"]["hours_to_empty"]
+                hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
+                summary_value = f"{hrs_str} hrs to Empty"
+            elif status == "Charging":
+                hrs = coordinator["values"]["hours_to_full"]
+                hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
+                summary_value = f"{hrs_str} hrs to Full"
+            coordinator["values"]["summary"] = summary_value
 
-                # Summary Sensor Logic
-                summary_value = "Idle"
-                if status == "Discharging":
-                    hrs = coordinator["values"]["hours_to_empty"]
-                    hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
-                    summary_value = f"{hrs_str} hrs to Empty"
-                elif status == "Charging":
-                    hrs = coordinator["values"]["hours_to_full"]
-                    hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
-                    summary_value = f"{hrs_str} hrs to Full"
+            for key in (interval_key, "hours_to_empty", "hours_to_full", "summary"):
+                ent = coordinator["entities"].get(key)
+                if ent is not None and ent.hass is not None:
+                    ent.async_write_ha_state()
 
-                coordinator["values"]["summary"] = summary_value
-                await add_sensor_entity("summary", "")
-
-        async_track_time_interval(hass, updater, interval_info["interval"])
+        entry.async_on_unload(async_track_time_interval(hass, updater, interval))
 
     for key in ROLLING_AVERAGE_INTERVALS:
         track_rolling_averages(key)
 
-class TeslaEvtvSensor(RestoreEntity):
-    def __init__(self, device_name, key, unit, coordinator):
+
+class TeslaEvtvSensor(RestoreSensor):
+    _attr_should_poll = False
+
+    def __init__(self, device_name, key, unit, coordinator, device_info=None):
         self._device = device_name
         self._key = key
-        self._unit = unit
+        self._unit = unit or None
         self._coordinator = coordinator
-        self._state = None
         self._last_update = 0
         self._cooldown = 1.0
+        self._attr_device_info = device_info or pack_device_info(device_name, device_name)
+        # Only used if the entity is not yet in the entity registry (existing
+        # entities keep their registered entity_id). Matches the historical
+        # sensor.<pack>_<key> pattern instead of HA 2026's area-prefixed ids.
+        self.entity_id = f"sensor.{device_name}_{key}"
 
     @property
     def name(self):
@@ -260,17 +366,23 @@ class TeslaEvtvSensor(RestoreEntity):
         return f"{self._device}_{self._key}"
 
     @property
-    def state(self):
-        return self._coordinator["values"].get(self._key)
+    def native_value(self):
+        value = self._coordinator["values"].get(self._key)
+        if self._is_numeric() and not isinstance(value, (int, float)):
+            return None
+        return value
 
     @property
-    def unit_of_measurement(self):
+    def native_unit_of_measurement(self):
         return self._unit
+
+    def _is_numeric(self):
+        return self._key not in TEXT_KEYS
 
     @property
     def icon(self):
-        soc = self.state
-        if self._key == "state_of_charge" and soc is not None:
+        soc = self._coordinator["values"].get(self._key)
+        if self._key == "state_of_charge" and isinstance(soc, (int, float)):
             soc = float(soc)
             for threshold, icon in zip(
                 [90, 80, 70, 60, 50, 40, 30, 20, 10],
@@ -292,49 +404,62 @@ class TeslaEvtvSensor(RestoreEntity):
         return ICON_MAP.get(self._key, "mdi:chip")
 
     @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._device)},
-            "name": self._device,
-            "manufacturer": "EVTV",
-            "model": "Tesla BMS",
-            "suggested_area": "Battery Storage"
-        }
-
-    @property
     def device_class(self):
-        if self._key.endswith("_energy") or self._key in ("available_energy",):
-            return "energy"
-        if self._key in ("volts", "lowest_cell", "highest_cell", "average_cell", "cell_difference", "trigger_cell_voltage"):
-            return "voltage"
-        if self._key in ("current", "tcch_amps"):
-            return "current"
-        if self._key == "power":
-            return "power"
+        k = self._key
+        if k in ENERGY_BASES or k in METER_KEYS:
+            return SensorDeviceClass.ENERGY
+        if k == "available_energy":
+            return SensorDeviceClass.ENERGY_STORAGE
+        if k in VOLTAGE_KEYS:
+            return SensorDeviceClass.VOLTAGE
+        if k in ("current", "tcch_amps"):
+            return SensorDeviceClass.CURRENT
+        if k in POWER_KEYS:
+            return SensorDeviceClass.POWER
+        if k == "state_of_charge":
+            return SensorDeviceClass.BATTERY
         return None
 
     @property
     def state_class(self):
-        if self._key.endswith("_energy") or self._key in ("available_energy",):
-            return "total_increasing"
-        if self._key in ("power", "volts", "current", "state_of_charge", "cell_difference", "trigger_cell_voltage", "power_average", "power_hourly_average", "hours_to_empty", "hours_to_full"):
-            return "measurement"
+        k = self._key
+        if k in ENERGY_BASES:
+            return SensorStateClass.TOTAL_INCREASING
+        if k in MEASUREMENT_KEYS:
+            return SensorStateClass.MEASUREMENT
         return None
 
-    async def async_added_to_hass(self):
+    async def _async_restore(self):
         old_state = await self.async_get_last_state()
-        if old_state and old_state.state not in (None, "unknown", ""):
-            try:
-                self._coordinator["values"][self._key] = float(old_state.state)
-            except ValueError:
-                self._coordinator["values"][self._key] = old_state.state
+        if old_state is None or old_state.state in (None, "unknown", "unavailable", ""):
+            return None
+        try:
+            restored = float(old_state.state)
+        except ValueError:
+            restored = None if self._is_numeric() else old_state.state
+        if restored is not None and self._key not in self._coordinator["values"]:
+            self._coordinator["values"][self._key] = restored
+        return old_state if restored is not None else None
+
+    async def async_added_to_hass(self):
+        old_state = await self._async_restore()
+
+        # Seed lifetime energy totals so they survive restarts.
+        if self._key in ENERGY_BASES and old_state is not None:
+            energy = self._coordinator["energy"]
+            if self._key not in energy["restored"]:
+                energy["restored"].add(self._key)
+                try:
+                    energy[self._key] += float(old_state.state)
+                except ValueError:
+                    pass
+                self._coordinator["values"][self._key] = round(energy[self._key], 3)
 
         async def handle_update(values):
-            if self._key in values:
-                now = time.monotonic()
-                if now - self._last_update >= self._cooldown:
-                    self._last_update = now
-                    self.async_write_ha_state()
+            now = time.monotonic()
+            if now - self._last_update >= self._cooldown:
+                self._last_update = now
+                self.async_write_ha_state()
 
         self.async_on_remove(
             async_dispatcher_connect(
@@ -343,3 +468,38 @@ class TeslaEvtvSensor(RestoreEntity):
                 handle_update
             )
         )
+
+
+class EnergyMeterSensor(TeslaEvtvSensor):
+    """charge/discharge_energy_{hour,day,week,month,year}: calendar-reset kWh."""
+
+    @property
+    def native_value(self):
+        return round(self._coordinator["meters"][self._key]["value"], 3)
+
+    @property
+    def state_class(self):
+        return SensorStateClass.TOTAL
+
+    @property
+    def last_reset(self):
+        return self._coordinator["meters"][self._key]["last_reset"]
+
+    async def _async_restore(self):
+        old_state = await self.async_get_last_state()
+        meter = self._coordinator["meters"][self._key]
+        if old_state is None or meter["restored"]:
+            return None
+        meter["restored"] = True
+        try:
+            restored = float(old_state.state)
+            saved_reset = dt_util.parse_datetime(str(old_state.attributes.get("last_reset") or ""))
+        except (ValueError, TypeError):
+            return None
+        now = dt_util.now()
+        _roll_meter(self._coordinator, self._key, now)
+        if saved_reset is not None and saved_reset == meter["last_reset"]:
+            # Same calendar period as before the restart: keep counting.
+            meter["value"] += restored
+        self._coordinator["values"][self._key] = round(meter["value"], 3)
+        return old_state

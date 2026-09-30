@@ -1,7 +1,9 @@
+# v1.3.6 (2026-09-30): 0x150 fallback current decoded as signed int16
+#   (two's complement, 65536-raw on charge; was 65535-raw = 1 A low).
 # v1.3.5 (2026-09-30): power is ALWAYS computed here as volts x current.
 #   volts   : 0x150 only (never derived from 0x151; P/I volts caused HA swing).
 #   current : fine 0x151 current when fresh (<5 s on that UDP port), else the
-#             coarse 0x150 fallback current (pre-1.3.2 65535-raw formula).
+#             coarse 0x150 fallback current (signed int16 amps).
 #   The controller's 0x151 power field is ignored entirely (PP0 reports ~2x).
 #   Sign: + = charging (sensor.py convention). Per-pack invert_current flips
 #   the current sign for controllers that report it the other way (PP0).
@@ -86,11 +88,11 @@ def parse_udp_packet(payload: bytes, port: int, invert_current: bool = False) ->
             result["power"] = _power(volts, _LAST_151_CURRENT[port])
         else:
             # Fallback for packs with no recent 0x151.
-            if raw_current > 32768:
-                current = 65535 - raw_current      # charging (uint16 wrap)
-            else:
-                current = -raw_current             # discharging
-            current *= sign
+            # Signed int16 amps, controller sign (negative = charging), so
+            # HA current = -int16. Confirmed against fine 0x151 current on
+            # PP1/PP2 history: e.g. raw 65525 <-> ~+11 A, raw 2 <-> ~-2 A.
+            signed_raw = raw_current - 65536 if raw_current >= 32768 else raw_current
+            current = -signed_raw * sign
             result.update({
                 "current": round(current, 2),
                 "power": _power(volts, current),
