@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Tesla EVTV BMS",
-        "description": "Configure the Tesla EVTV BMS UDP listener. Telnet is read-only (status only; no keys are sent).",
+        "description": "Configure the Tesla EVTV BMS UDP listener. Telnet is polled for Gigavac status. PP1/PP2 contactor switches may send only key 1 or 2 after guards; PP0 stays read-only.",
         "data": {
           "name": "Name",
           "port": "UDP port",
@@ -25,7 +25,8 @@
         "data": {
           "invert_current": "Invert current sign (use if charging shows negative)",
           "host": "Controller IP (telnet, optional)",
-          "telnet_port": "Telnet port (optional, default 23)"
+          "telnet_port": "Telnet port (optional, default 23)",
+          "open_current_max": "Max |current| (A) allowed when opening contactors (Sonoff-off bypasses this)"
         }
       }
     }

@@ -14,6 +14,16 @@ This custom integration for Home Assistant listens to a UDP port and decodes Tes
   contactor commanded/reported state, welded warning, Tesla internal
   contactor status, and last-read timestamp. Defaults: Powerpack0
   192.168.6.95, Powerpack1 .96, Powerpack2 .97, port 23.
+- v1.3.8: guarded EVTV Gigavac switches for Powerpack1 and Powerpack2
+  (`switch.powerpackN_evtv_negative_contactor` / `_positive_contactor`).
+  Open/close send only telnet key 1 or 2 after a main-screen read; the
+  config menu, welded warning, and (for close) non-user/automation
+  contexts are blocked. Opening requires pack |current| at or below
+  `open_current_max` (default 2.0 A) or the Sonoff connect path off.
+  Closing both uses negative, 10 s precharge, then positive; sync gates
+  apply if that would put PP1 and PP2 on the bus together. Powerpack0
+  stays read-only. Services: `tesla_evtv_bms.open_contactors` /
+  `close_contactors`.
 
 ## Installation (HACS)
 

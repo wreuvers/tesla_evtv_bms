@@ -13,7 +13,7 @@ SIGNAL_OPTIONS_UPDATED = f"{DOMAIN}_{{}}_options"
 SIGNAL_CONTACTOR_UPDATE = f"{DOMAIN}_{{}}_contactor"
 
 # Keep in sync with manifest.json "version" (checked by the offline tests).
-SW_VERSION = "1.3.7"
+SW_VERSION = "1.3.8"
 MANUFACTURER = "EVTV"
 MODEL = "Tesla pack BMS"
 
@@ -34,6 +34,31 @@ DEFAULT_CONTROLLER_HOSTS = {
 TELNET_POLL_SECONDS = 60
 TELNET_LISTEN_SECONDS = 2.5
 TELNET_CONNECT_TIMEOUT = 5.0
+
+# v1.3.8: guarded EVTV Gigavac contactors (PP1/PP2 only).
+# Open is blocked if |pack current| exceeds this (amps) unless the Sonoff
+# connect path is already off. Close is never allowed from automations.
+CONF_OPEN_CURRENT_MAX = "open_current_max"
+DEFAULT_OPEN_CURRENT_MAX = 2.0
+PRECHARGE_SECONDS = 10.0
+# Packs that may have EVTV contactor switches (PP0 is read-only).
+CONTACTOR_SWITCH_PACKS = frozenset({"powerpack1", "powerpack2"})
+SONOFF_CONNECT = {
+    "powerpack1": "switch.powerpack1_connect_main_inverter",
+    "powerpack2": "switch.powerpack2_connect_main_inverter",
+}
+CURRENT_SENSOR = {
+    "powerpack1": "sensor.powerpack1_current",
+    "powerpack2": "sensor.powerpack2_current",
+}
+# Existing HA sync / last_good entities reused for the close-on-bus rule.
+SYNC_IN_SYNC = "binary_sensor.powerpacks_in_sync"
+SYNC_LAST_GOOD_DELTA = "sensor.powerpacks_volts_last_good_delta"
+SYNC_MAX_DIFF = "input_number.battery_sync_max_voltage_diff"
+SYNC_CELL_PP1 = "sensor.powerpack1_average_cell"
+SYNC_CELL_PP2 = "sensor.powerpack2_average_cell"
+SYNC_CELL_MAX_DIFF = 0.05  # same gate as script.reconnect_powerpacks_now
+OTHER_PACK = {"powerpack1": "powerpack2", "powerpack2": "powerpack1"}
 
 
 def default_controller_host(name: str) -> str | None:

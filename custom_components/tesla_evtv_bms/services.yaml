@@ -1,0 +1,34 @@
+open_contactors:
+  name: Open EVTV contactors
+  description: >
+    Open both Gigavac contactors on a pack (positive first, then negative).
+    Sends only key 1 or 2 after guards. Blocked if the controller is on the
+    configuration menu or a welded warning is set. Opening is allowed when
+    the Sonoff connect path is off, or when pack |current| is within
+    open_current_max (default 2.0 A).
+  fields:
+    pack:
+      required: true
+      example: powerpack1
+      selector:
+        select:
+          options:
+            - powerpack1
+            - powerpack2
+
+close_contactors:
+  name: Close EVTV contactors
+  description: >
+    Close both Gigavac contactors (negative first, 10 s precharge, then
+    positive). User/dashboard only — automations are blocked. Sync gates
+    apply if this would put PP1 and PP2 on the bus together. Sends only
+    key 1 or 2 after guards. PP0 has no close service.
+  fields:
+    pack:
+      required: true
+      example: powerpack1
+      selector:
+        select:
+          options:
+            - powerpack1
+            - powerpack2

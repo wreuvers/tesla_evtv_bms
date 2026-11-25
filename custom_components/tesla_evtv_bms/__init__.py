@@ -79,6 +79,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         },
         "socket": None,
         "title": name,
+        "name_lower": name_lower,
+        "entry": entry,
         "contactor": {},
         "telnet_lock": asyncio.Lock(),
     }
@@ -121,6 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async_register_contactor_services(hass)
     # Options change: update invert_current in place (no entry reload/socket rebind).
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
@@ -246,3 +249,36 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     hass.data[DOMAIN].pop(name_lower, None)
     return unloaded
+
+
+def async_register_contactor_services(hass: HomeAssistant) -> None:
+    """Register open/close-both services once."""
+    if hass.services.has_service(DOMAIN, "open_contactors"):
+        return
+
+    async def _handle(call, target_on: bool):
+        from homeassistant.exceptions import HomeAssistantError
+        from .contactor_ops import async_set_both
+        from .contactor_control import pack_allows_switches as _allows
+        pack = (call.data or {}).get("pack") or (call.data or {}).get("name") or ""
+        name_lower = "".join(ch for ch in str(pack).lower() if ch.isalnum())
+        if not _allows(name_lower):
+            raise HomeAssistantError("pack must be powerpack1 or powerpack2")
+        data = (hass.data.get(DOMAIN, {}) or {}).get(name_lower)
+        if not data or not data.get("entry"):
+            raise HomeAssistantError(f"{name_lower} is not loaded")
+        try:
+            return await async_set_both(
+                hass, data["entry"], name_lower, target_on, call.context
+            )
+        except Exception as err:
+            raise HomeAssistantError(str(err)) from err
+
+    async def _open(call):
+        await _handle(call, False)
+
+    async def _close(call):
+        await _handle(call, True)
+
+    hass.services.async_register(DOMAIN, "open_contactors", _open)
+    hass.services.async_register(DOMAIN, "close_contactors", _close)

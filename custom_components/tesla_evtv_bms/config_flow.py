@@ -10,6 +10,8 @@ from .const import (
     CONF_INVERT_CURRENT,
     DEFAULT_INVERT_CURRENT,
     DEFAULT_TELNET_PORT,
+    CONF_OPEN_CURRENT_MAX,
+    DEFAULT_OPEN_CURRENT_MAX,
     default_controller_host,
 )
 
@@ -55,7 +57,7 @@ class TeslaEVTVBMSOptionsFlow(config_entries.OptionsFlow):
     """Per-pack options. invert_current flips the current sign so + = charging.
 
     host / telnet_port are optional; blank host uses the built-in default
-    for Powerpack0/1/2. Telnet is read-only (no keys are sent).
+    for Powerpack0/1/2. Status poll is read-only; PP1/PP2 switches may send key 1 or 2 after guards.
     """
 
     async def async_step_init(self, user_input=None):
@@ -75,11 +77,16 @@ class TeslaEVTVBMSOptionsFlow(config_entries.OptionsFlow):
             CONF_TELNET_PORT,
             self.config_entry.data.get(CONF_TELNET_PORT, DEFAULT_TELNET_PORT),
         )
+        open_max = self.config_entry.options.get(
+            CONF_OPEN_CURRENT_MAX,
+            self.config_entry.data.get(CONF_OPEN_CURRENT_MAX, DEFAULT_OPEN_CURRENT_MAX),
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
                 vol.Optional(CONF_INVERT_CURRENT, default=current): bool,
                 vol.Optional(CONF_HOST, default=host or ""): str,
                 vol.Optional(CONF_TELNET_PORT, default=int(telnet_port)): vol.Coerce(int),
+                vol.Optional(CONF_OPEN_CURRENT_MAX, default=float(open_max)): vol.Coerce(float),
             }),
         )
