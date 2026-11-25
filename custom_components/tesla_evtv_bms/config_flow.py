@@ -1,13 +1,24 @@
 from homeassistant import config_entries
 from homeassistant.core import callback
 import voluptuous as vol
-from .const import DOMAIN, CONF_NAME, CONF_PORT, CONF_INVERT_CURRENT, DEFAULT_INVERT_CURRENT
+from .const import (
+    DOMAIN,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_HOST,
+    CONF_TELNET_PORT,
+    CONF_INVERT_CURRENT,
+    DEFAULT_INVERT_CURRENT,
+    DEFAULT_TELNET_PORT,
+    default_controller_host,
+)
 
 DEFAULT_PORT = 6850
 DEFAULT_PACK_SIZE = 75.0
 DEFAULT_CELLS_SERIES = 96
 DEFAULT_MIN_VOLTS = 3.2
 DEFAULT_MAX_VOLTS = 4.1
+
 
 class TeslaEVTVBMSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
@@ -31,6 +42,8 @@ class TeslaEVTVBMSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required("min_cell_volts", default=DEFAULT_MIN_VOLTS): vol.Coerce(float),
                 vol.Required("max_cell_volts", default=DEFAULT_MAX_VOLTS): vol.Coerce(float),
                 vol.Optional(CONF_INVERT_CURRENT, default=DEFAULT_INVERT_CURRENT): bool,
+                vol.Optional(CONF_HOST, default=""): str,
+                vol.Optional(CONF_TELNET_PORT, default=DEFAULT_TELNET_PORT): vol.Coerce(int),
             }),
             description_placeholders={
                 "info": "Configure the Tesla EVTV BMS listener"
@@ -39,7 +52,11 @@ class TeslaEVTVBMSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class TeslaEVTVBMSOptionsFlow(config_entries.OptionsFlow):
-    """Per-pack options. invert_current flips the current sign so + = charging."""
+    """Per-pack options. invert_current flips the current sign so + = charging.
+
+    host / telnet_port are optional; blank host uses the built-in default
+    for Powerpack0/1/2. Telnet is read-only (no keys are sent).
+    """
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
@@ -49,9 +66,20 @@ class TeslaEVTVBMSOptionsFlow(config_entries.OptionsFlow):
             CONF_INVERT_CURRENT,
             self.config_entry.data.get(CONF_INVERT_CURRENT, DEFAULT_INVERT_CURRENT),
         )
+        name = self.config_entry.data.get(CONF_NAME, "")
+        host = self.config_entry.options.get(
+            CONF_HOST,
+            self.config_entry.data.get(CONF_HOST, default_controller_host(name) or ""),
+        )
+        telnet_port = self.config_entry.options.get(
+            CONF_TELNET_PORT,
+            self.config_entry.data.get(CONF_TELNET_PORT, DEFAULT_TELNET_PORT),
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
                 vol.Optional(CONF_INVERT_CURRENT, default=current): bool,
+                vol.Optional(CONF_HOST, default=host or ""): str,
+                vol.Optional(CONF_TELNET_PORT, default=int(telnet_port)): vol.Coerce(int),
             }),
         )

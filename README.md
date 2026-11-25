@@ -10,6 +10,10 @@ This custom integration for Home Assistant listens to a UDP port and decodes Tes
 - Utility sensor for Charge and Discharge by Hour, Day, Week, Month, Year
 - Trigger Cell to make everything safe :)
 - Lightweight and local
+- v1.3.7: read-only telnet poll (no keys sent) for per-pack Gigavac
+  contactor commanded/reported state, welded warning, Tesla internal
+  contactor status, and last-read timestamp. Defaults: Powerpack0
+  192.168.6.95, Powerpack1 .96, Powerpack2 .97, port 23.
 
 ## Installation (HACS)
 

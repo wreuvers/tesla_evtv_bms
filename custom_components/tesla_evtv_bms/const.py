@@ -1,15 +1,19 @@
 DOMAIN = "tesla_evtv_bms"
-PLATFORMS = ["sensor", "switch"]
+PLATFORMS = ["sensor", "switch", "binary_sensor"]
 
 CONF_NAME = "name"
 CONF_PORT = "port"
+CONF_HOST = "host"
+CONF_TELNET_PORT = "telnet_port"
 
 SIGNAL_UPDATE_ENTITY = f"{DOMAIN}_{{}}_update"
 # Fired (per pack) after invert_current changes via options dialog or switch.
 SIGNAL_OPTIONS_UPDATED = f"{DOMAIN}_{{}}_options"
+# Fired (per pack) after a read-only telnet status poll.
+SIGNAL_CONTACTOR_UPDATE = f"{DOMAIN}_{{}}_contactor"
 
 # Keep in sync with manifest.json "version" (checked by the offline tests).
-SW_VERSION = "1.3.6"
+SW_VERSION = "1.3.7"
 MANUFACTURER = "EVTV"
 MODEL = "Tesla pack BMS"
 
@@ -18,6 +22,24 @@ MODEL = "Tesla pack BMS"
 # sign; HA convention is + = charging.
 CONF_INVERT_CURRENT = "invert_current"
 DEFAULT_INVERT_CURRENT = False
+
+# v1.3.7: optional telnet host for read-only contactor status. Existing
+# entries need no migration; the pack name selects the default.
+DEFAULT_TELNET_PORT = 23
+DEFAULT_CONTROLLER_HOSTS = {
+    "powerpack0": "192.168.6.95",
+    "powerpack1": "192.168.6.96",
+    "powerpack2": "192.168.6.97",
+}
+TELNET_POLL_SECONDS = 60
+TELNET_LISTEN_SECONDS = 2.5
+TELNET_CONNECT_TIMEOUT = 5.0
+
+
+def default_controller_host(name: str) -> str | None:
+    """Default telnet host for a pack name (case-insensitive, no spaces)."""
+    key = "".join(ch for ch in name.lower() if ch.isalnum())
+    return DEFAULT_CONTROLLER_HOSTS.get(key)
 
 
 def pack_device_info(name_lower: str, title: str) -> dict:

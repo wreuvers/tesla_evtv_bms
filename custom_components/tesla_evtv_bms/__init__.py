@@ -1,25 +1,58 @@
 import asyncio
-import socket
 import logging
+import socket
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
     PLATFORMS,
     SIGNAL_UPDATE_ENTITY,
     SIGNAL_OPTIONS_UPDATED,
+    SIGNAL_CONTACTOR_UPDATE,
     CONF_INVERT_CURRENT,
+    CONF_HOST,
+    CONF_TELNET_PORT,
     DEFAULT_INVERT_CURRENT,
+    DEFAULT_TELNET_PORT,
+    TELNET_POLL_SECONDS,
+    TELNET_LISTEN_SECONDS,
+    TELNET_CONNECT_TIMEOUT,
+    default_controller_host,
 )
 from .parser import parse_udp_packet
+from .telnet_status import parse_status_screen, read_telnet_screen
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
+
+
+def _controller_host(entry: ConfigEntry) -> str | None:
+    host = entry.options.get(CONF_HOST, entry.data.get(CONF_HOST))
+    if isinstance(host, str):
+        host = host.strip()
+    if host:
+        return host
+    return default_controller_host(entry.data.get("name", ""))
+
+
+def _telnet_port(entry: ConfigEntry) -> int:
+    try:
+        port = int(entry.options.get(
+            CONF_TELNET_PORT, entry.data.get(CONF_TELNET_PORT, DEFAULT_TELNET_PORT)
+        ))
+    except (TypeError, ValueError):
+        port = DEFAULT_TELNET_PORT
+    return port or DEFAULT_TELNET_PORT
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     name = entry.data["name"]
@@ -44,7 +77,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "max_cell_volts": entry.data.get("max_cell_volts", 4.2),
             "invert_current": invert_current,
         },
-        "socket": None
+        "socket": None,
+        "title": name,
+        "contactor": {},
+        "telnet_lock": asyncio.Lock(),
     }
 
     def udp_callback(sock):
@@ -87,6 +123,101 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # Options change: update invert_current in place (no entry reload/socket rebind).
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    # Read-only telnet contactor poll (connect, recv, disconnect; never send).
+    async def _poll_contactor(_now=None):
+        pack = hass.data.get(DOMAIN, {}).get(name_lower)
+        if pack is None:
+            return
+        host = _controller_host(entry)
+        tport = _telnet_port(entry)
+        attempt = dt_util.now()
+        if not host:
+            pack["contactor"] = {
+                "available": False,
+                "status_available": True,
+                "error": "no_host",
+                "screen": None,
+                "last_attempt": attempt,
+                "last_read": (pack.get("contactor") or {}).get("last_read"),
+            }
+            async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
+            return
+        lock = pack.get("telnet_lock")
+        if lock is None:
+            lock = asyncio.Lock()
+            pack["telnet_lock"] = lock
+        if lock.locked():
+            _LOGGER.debug("%s: skipping telnet poll; previous still running", name)
+            return
+        async with lock:
+            try:
+                raw = await hass.async_add_executor_job(
+                    read_telnet_screen, host, tport, TELNET_LISTEN_SECONDS, TELNET_CONNECT_TIMEOUT
+                )
+            except Exception as err:
+                # Connect failed (PuTTY may be using the only session) or I/O error.
+                _LOGGER.info("%s: telnet read failed for %s:%s (%s); will retry", name, host, tport, err)
+                prev = pack.get("contactor") or {}
+                pack["contactor"] = {
+                    "available": False,
+                    "status_available": True,
+                    "error": "connect_failed",
+                    "screen": None,
+                    "host": host,
+                    "last_attempt": attempt,
+                    "last_read": prev.get("last_read"),
+                }
+                async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
+                return
+
+            parsed = parse_status_screen(raw)
+            screen = parsed.get("screen")
+            # last_read is set whenever we received a recognizable screen (main or menu)
+            # or a connected-but-empty session (no_screen). Connect failures keep the
+            # previous last_read and mark binary sensors unavailable.
+            last_read = attempt if screen in ("main", "menu", "no_screen") else None
+            state = {
+                "host": host,
+                "screen": screen,
+                "last_attempt": attempt,
+                "last_read": last_read,
+                "error": None,
+                "status_available": True,
+                "available": screen == "main" and any(
+                    k in parsed for k in (
+                        "negative_commanded", "negative_reported",
+                        "positive_commanded", "positive_reported", "welded",
+                    )
+                ),
+            }
+            if screen == "main":
+                for k in (
+                    "negative_commanded", "negative_reported",
+                    "positive_commanded", "positive_reported", "welded",
+                    "internal_status", "internal_allowed", "internal_state",
+                ):
+                    if k in parsed:
+                        state[k] = parsed[k]
+            elif screen == "menu":
+                state["internal_status"] = "menu"
+                state["error"] = None
+            elif screen == "no_screen":
+                state["internal_status"] = "no_screen"
+                state["available"] = False
+            pack["contactor"] = state
+            async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
+
+    # First poll shortly after startup; then every TELNET_POLL_SECONDS.
+    async def _first_poll(_now=None):
+        await _poll_contactor()
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _poll_contactor, timedelta(seconds=TELNET_POLL_SECONDS)
+        )
+    )
+    hass.async_create_task(_first_poll())
     return True
 
 
@@ -104,6 +235,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         _LOGGER.info("%s: invert_current set to %s", entry.data["name"], invert_current)
     # Let the Invert switch (and anything else) refresh its state.
     async_dispatcher_send(hass, SIGNAL_OPTIONS_UPDATED.format(name_lower))
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     name_lower = entry.data["name"].lower()

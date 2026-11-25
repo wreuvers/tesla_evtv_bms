@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Tesla EVTV BMS",
-        "description": "Configure the Tesla EVTV BMS UDP listener",
+        "description": "Configure the Tesla EVTV BMS UDP listener. Telnet is read-only (status only; no keys are sent).",
         "data": {
           "name": "Name",
           "port": "UDP port",
@@ -11,7 +11,9 @@
           "cells_in_series": "Cells in series",
           "min_cell_volts": "Min cell volts",
           "max_cell_volts": "Max cell volts",
-          "invert_current": "Invert current sign (use if charging shows negative)"
+          "invert_current": "Invert current sign (use if charging shows negative)",
+          "host": "Controller IP (telnet, optional)",
+          "telnet_port": "Telnet port (optional, default 23)"
         }
       }
     }
@@ -21,7 +23,9 @@
       "init": {
         "title": "Tesla EVTV BMS options",
         "data": {
-          "invert_current": "Invert current sign (use if charging shows negative)"
+          "invert_current": "Invert current sign (use if charging shows negative)",
+          "host": "Controller IP (telnet, optional)",
+          "telnet_port": "Telnet port (optional, default 23)"
         }
       }
     }

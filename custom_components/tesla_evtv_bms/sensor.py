@@ -1,5 +1,9 @@
 """Tesla EVTV BMS sensors.
 
+v1.3.7: also creates diagnostic internal-contactor status and last-read
+timestamp sensors (read-only telnet). Unique ids of v1.3.6 sensors are
+unchanged.
+
 v1.3.6 changes (unique_ids / entity_ids unchanged):
 - Entities are SensorEntity/RestoreSensor (state_class & device_class now
   actually reach HA; the old plain-Entity class never exposed state_class).
@@ -25,13 +29,14 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SIGNAL_UPDATE_ENTITY, pack_device_info
+from .const import DOMAIN, SIGNAL_UPDATE_ENTITY, SIGNAL_CONTACTOR_UPDATE, pack_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -214,6 +219,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             coordinator["entities"][key] = sensor
             initial.append(sensor)
     async_add_entities(initial)
+    async_add_entities([
+        EvtvInternalContactorSensor(name, title, device_info),
+        EvtvContactorLastReadSensor(name, title, device_info),
+    ])
 
     async def add_sensor_entity(key, unit):
         if key not in coordinator["entities"]:
@@ -503,3 +512,118 @@ class EnergyMeterSensor(TeslaEvtvSensor):
             meter["value"] += restored
         self._coordinator["values"][self._key] = round(meter["value"], 3)
         return old_state
+
+
+
+class EvtvInternalContactorSensor(RestoreSensor):
+    """Tesla-internal contactor status text from the telnet screen.
+
+    Values include a status such as 'allowed=1 status=4 CLOSED', or
+    'menu' / 'no_screen' / 'connect_failed' when contactors were not read.
+    Never commands the controller.
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_name = "Internal contactor status"
+    _attr_icon = "mdi:transmission-tower"
+
+    def __init__(self, name_lower, title, device_info):
+        self._name_lower = name_lower
+        self._attr_unique_id = f"{name_lower}_internal_contactor_status"
+        self._attr_device_info = device_info
+        self.entity_id = f"sensor.{name_lower}_internal_contactor_status"
+
+    def _contactor(self) -> dict:
+        pack = (self.hass.data.get(DOMAIN, {}) if self.hass else {}).get(self._name_lower) or {}
+        return pack.get("contactor") or {}
+
+    @property
+    def available(self) -> bool:
+        data = self._contactor()
+        return bool(data) and data.get("status_available") is True
+
+    @property
+    def native_value(self):
+        data = self._contactor()
+        if data.get("screen") == "menu":
+            return "menu"
+        if data.get("screen") == "no_screen":
+            return "no_screen"
+        if data.get("error") == "connect_failed":
+            return "connect_failed"
+        return data.get("internal_status")
+
+    @property
+    def extra_state_attributes(self):
+        data = self._contactor()
+        attrs = {}
+        for k in ("screen", "error", "host", "internal_allowed", "internal_state"):
+            if data.get(k) not in (None, ""):
+                attrs[k] = data[k]
+        return attrs or None
+
+    async def async_added_to_hass(self) -> None:
+        @callback
+        def _updated():
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_CONTACTOR_UPDATE.format(self._name_lower), _updated
+            )
+        )
+
+
+class EvtvContactorLastReadSensor(RestoreSensor):
+    """Timestamp of the last completed read-only telnet poll that returned a screen."""
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_name = "Contactor last read"
+    _attr_icon = "mdi:clock-check-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, name_lower, title, device_info):
+        self._name_lower = name_lower
+        self._attr_unique_id = f"{name_lower}_contactor_last_read"
+        self._attr_device_info = device_info
+        self.entity_id = f"sensor.{name_lower}_contactor_last_read"
+
+    def _contactor(self) -> dict:
+        pack = (self.hass.data.get(DOMAIN, {}) if self.hass else {}).get(self._name_lower) or {}
+        return pack.get("contactor") or {}
+
+    @property
+    def available(self) -> bool:
+        return self._contactor().get("last_read") is not None
+
+    @property
+    def native_value(self):
+        return self._contactor().get("last_read")
+
+    @property
+    def extra_state_attributes(self):
+        data = self._contactor()
+        attrs = {}
+        if data.get("last_attempt") is not None:
+            attrs["last_attempt"] = data["last_attempt"]
+        if data.get("error"):
+            attrs["error"] = data["error"]
+        if data.get("host"):
+            attrs["host"] = data["host"]
+        if data.get("screen"):
+            attrs["screen"] = data["screen"]
+        return attrs or None
+
+    async def async_added_to_hass(self) -> None:
+        @callback
+        def _updated():
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_CONTACTOR_UPDATE.format(self._name_lower), _updated
+            )
+        )
