@@ -11,6 +11,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    TELNET_HOLD_SECONDS,
     DOMAIN,
     CONF_HOST,
     CONF_TELNET_PORT,
@@ -33,7 +34,7 @@ from .contactor_control import (
     precharge_wait_s,
     verify_match,
 )
-from .telnet_status import apply_contactor_toggle, parse_status_screen, read_telnet_screen
+from .telnet_status import SCREEN_EXTRA_KEYS, apply_contactor_toggle, parse_status_screen, read_telnet_screen
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ def _current_amps(hass: HomeAssistant, name_lower: str):
         return None
 
 
-def _store_contactor(pack: dict, parsed: dict, host: str, error=None, attempt=None) -> None:
+def _store_contactor(pack: dict, parsed: dict, host: str, error=None, attempt=None, allow_hold: bool = True) -> None:
     attempt = attempt or dt_util.now()
     screen = parsed.get("screen")
     state = {
@@ -101,6 +102,7 @@ def _store_contactor(pack: dict, parsed: dict, host: str, error=None, attempt=No
         "last_read": attempt if screen in ("main", "menu", "no_screen") else (pack.get("contactor") or {}).get("last_read"),
         "error": error,
         "status_available": True,
+        "last_main": (pack.get("contactor") or {}).get("last_main"),
         "available": screen == "main" and any(
             k in parsed for k in (
                 "negative_commanded", "negative_reported",
@@ -113,9 +115,27 @@ def _store_contactor(pack: dict, parsed: dict, host: str, error=None, attempt=No
             "negative_commanded", "negative_reported",
             "positive_commanded", "positive_reported", "welded",
             "internal_status", "internal_allowed", "internal_state",
-        ):
+        ) + SCREEN_EXTRA_KEYS:
             if k in parsed:
                 state[k] = parsed[k]
+        # v1.3.10: a main screen captured mid-redraw can miss single contactor
+        # lines. Carry the previous value of a missing pole for up to
+        # TELNET_HOLD_SECONDS instead of flapping the entity to unavailable.
+        prev = pack.get("contactor") or {}
+        prev_main = prev.get("last_main")
+        held = []
+        if allow_hold and prev_main is not None and (attempt - prev_main).total_seconds() <= TELNET_HOLD_SECONDS:
+            for k in ("negative_commanded", "negative_reported",
+                      "positive_commanded", "positive_reported", "welded"):
+                if k not in parsed and prev.get(k) is not None:
+                    state[k] = prev[k]
+                    held.append(k)
+        state["fields_held"] = held
+        if held:
+            # keep the older main timestamp for held fields' freshness
+            state["fields_held_since"] = prev.get("fields_held_since") or prev_main
+        state["available"] = state["available"] or bool(held)
+        state["last_main"] = attempt
         if parsed.get("negative_commanded") is True and parsed.get("negative_reported") is True:
             # Keep an existing close timestamp; set one if we didn't have it.
             state["negative_closed_mono"] = (pack.get("contactor") or {}).get("negative_closed_mono") or time.monotonic()
@@ -167,7 +187,7 @@ async def async_set_contactor(
             async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
             raise RuntimeError(f"telnet connect failed for {host}: {err}") from err
         before = parse_status_screen(parsed)
-        _store_contactor(pack, before, host)
+        _store_contactor(pack, before, host, allow_hold=False)
         async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
 
         if already_at_target(before if before.get("screen") == "main" else pack.get("contactor") or {}, pole, target_on) and before.get("screen") == "main":
@@ -223,7 +243,7 @@ async def async_set_contactor(
             raise RuntimeError(f"telnet toggle failed: {err}") from err
 
         after = result.get("after") or {}
-        _store_contactor(pack, after if after.get("screen") == "main" else (result.get("before") or after), host, error=result.get("error"))
+        _store_contactor(pack, after if after.get("screen") == "main" else (result.get("before") or after), host, error=result.get("error"), allow_hold=False)
         if result.get("sent") and target_on and pole == "negative" and after.get("negative_commanded") is True:
             pack["contactor"]["negative_closed_mono"] = time.monotonic()
         async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))

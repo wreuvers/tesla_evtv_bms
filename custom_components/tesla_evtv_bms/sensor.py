@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 
 from homeassistant.components.sensor import (
     RestoreSensor,
+    SensorEntity,
     SensorDeviceClass,
     SensorStateClass,
 )
@@ -222,6 +223,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities([
         EvtvInternalContactorSensor(name, title, device_info),
         EvtvContactorLastReadSensor(name, title, device_info),
+        EvtvScreenSensor(name, device_info, "pack_status", "EVTV pack status", "mdi:battery-heart-variant", "evtv_pack_status"),
+        EvtvScreenSensor(name, device_info, "runtime_s", "EVTV runtime", "mdi:timer-outline", "evtv_runtime"),
+        EvtvScreenSensor(name, device_info, "bms_alerts", "EVTV BMS alerts", "mdi:alert-circle-outline", "evtv_bms_alerts"),
+        EvtvBootSensor(name, device_info, "boot_time", "EVTV boot time", "evtv_boot_time"),
+        EvtvBootSensor(name, device_info, "last_reboot", "EVTV last reboot", "evtv_last_reboot"),
     ])
 
     async def add_sensor_entity(key, unit):
@@ -525,7 +531,9 @@ class EvtvInternalContactorSensor(RestoreSensor):
 
     _attr_should_poll = False
     _attr_has_entity_name = True
-    _attr_name = "Internal contactor status"
+    # v1.3.9: renamed (entity_id/unique_id unchanged). This is the Tesla
+    # pack's own internal contactor line, NOT the EVTV Neg/Pos contactors.
+    _attr_name = "Tesla internal contactors"
     _attr_icon = "mdi:transmission-tower"
 
     def __init__(self, name_lower, title, device_info):
@@ -618,6 +626,122 @@ class EvtvContactorLastReadSensor(RestoreSensor):
         return attrs or None
 
     async def async_added_to_hass(self) -> None:
+        @callback
+        def _updated():
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_CONTACTOR_UPDATE.format(self._name_lower), _updated
+            )
+        )
+
+
+
+class EvtvScreenSensor(SensorEntity):
+    """v1.3.9 read-only fields from the EVTV main screen (pack status, runtime, BMS alerts)."""
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+
+    def __init__(self, name_lower, device_info, key, label, icon, suffix):
+        self._name_lower = name_lower
+        self._key = key
+        self._attr_name = label
+        self._attr_icon = icon
+        self._attr_unique_id = f"{name_lower}_{suffix}"
+        self._attr_device_info = device_info
+        self.entity_id = f"sensor.{name_lower}_{suffix}"
+        if key == "runtime_s":
+            self._attr_device_class = SensorDeviceClass.DURATION
+            self._attr_native_unit_of_measurement = "s"
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        if key == "bms_alerts":
+            self._attr_native_unit_of_measurement = "alerts"
+
+    def _contactor(self) -> dict:
+        pack = (self.hass.data.get(DOMAIN, {}) if self.hass else {}).get(self._name_lower) or {}
+        return pack.get("contactor") or {}
+
+    @property
+    def available(self) -> bool:
+        data = self._contactor()
+        return data.get("screen") == "main" and data.get(self._key) is not None
+
+    @property
+    def native_value(self):
+        val = self._contactor().get(self._key)
+        if self._key == "bms_alerts":
+            return len(val) if isinstance(val, list) else None
+        if isinstance(val, str):
+            return val[:250]
+        return val
+
+    @property
+    def extra_state_attributes(self):
+        data = self._contactor()
+        attrs = {}
+        if self._key == "bms_alerts" and isinstance(data.get("bms_alerts"), list):
+            attrs["alerts"] = list(data["bms_alerts"])
+            attrs["summary"] = ", ".join(data["bms_alerts"])[:250]
+        if self._key == "pack_status" and data.get("faulted") is not None:
+            attrs["faulted"] = bool(data["faulted"])
+        for k in ("held", "held_reason"):
+            if data.get(k):
+                attrs[k] = data[k]
+        return attrs or None
+
+    async def async_added_to_hass(self) -> None:
+        @callback
+        def _updated():
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_CONTACTOR_UPDATE.format(self._name_lower), _updated
+            )
+        )
+
+
+class EvtvBootSensor(RestoreSensor):
+    """v1.3.9 EVTV boot time (now - Runtime) and last detected reboot. Read-only."""
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:restart-alert"
+
+    def __init__(self, name_lower, device_info, key, label, suffix):
+        self._name_lower = name_lower
+        self._key = key
+        self._attr_name = label
+        self._attr_unique_id = f"{name_lower}_{suffix}"
+        self._attr_device_info = device_info
+        self.entity_id = f"sensor.{name_lower}_{suffix}"
+        self._restored = None
+        if key == "boot_time":
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def _pack(self) -> dict:
+        return (self.hass.data.get(DOMAIN, {}) if self.hass else {}).get(self._name_lower) or {}
+
+    @property
+    def available(self) -> bool:
+        return self.native_value is not None
+
+    @property
+    def native_value(self):
+        val = self._pack().get(self._key)
+        if val is None and self._key == "last_reboot":
+            return self._restored
+        return val
+
+    async def async_added_to_hass(self) -> None:
+        if self._key == "last_reboot":
+            last = await self.async_get_last_sensor_data()
+            if last is not None and isinstance(last.native_value, datetime):
+                self._restored = last.native_value
+
         @callback
         def _updated():
             self.async_write_ha_state()

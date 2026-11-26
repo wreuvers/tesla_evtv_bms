@@ -6,7 +6,7 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -23,10 +23,16 @@ from .const import (
     TELNET_POLL_SECONDS,
     TELNET_LISTEN_SECONDS,
     TELNET_CONNECT_TIMEOUT,
+    TELNET_RETRY_LISTEN_SECONDS,
+    TELNET_HOLD_SECONDS,
+    TELNET_POLL_OFFSETS,
+    REBOOT_RUNTIME_SLACK_S,
+    REBOOT_BOOT_JUMP_S,
+    EVENT_EVTV_REBOOT,
     default_controller_host,
 )
 from .parser import parse_udp_packet
-from .telnet_status import parse_status_screen, read_telnet_screen
+from .telnet_status import SCREEN_EXTRA_KEYS, parse_status_screen, read_telnet_screen
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -154,14 +160,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("%s: skipping telnet poll; previous still running", name)
             return
         async with lock:
+            prev = pack.get("contactor") or {}
             try:
                 raw = await hass.async_add_executor_job(
                     read_telnet_screen, host, tport, TELNET_LISTEN_SECONDS, TELNET_CONNECT_TIMEOUT
                 )
+                parsed = parse_status_screen(raw)
+                if parsed.get("screen") == "no_screen":
+                    # v1.3.9: the v3.17 screen redraws ~every 2.5 s and a short
+                    # listen can miss it. Retry ONCE with a longer receive-only
+                    # listen. Still never sends a byte.
+                    raw = await hass.async_add_executor_job(
+                        read_telnet_screen, host, tport, TELNET_RETRY_LISTEN_SECONDS, TELNET_CONNECT_TIMEOUT
+                    )
+                    parsed = parse_status_screen(raw)
             except Exception as err:
                 # Connect failed (PuTTY may be using the only session) or I/O error.
                 _LOGGER.info("%s: telnet read failed for %s:%s (%s); will retry", name, host, tport, err)
-                prev = pack.get("contactor") or {}
                 pack["contactor"] = {
                     "available": False,
                     "status_available": True,
@@ -170,11 +185,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "host": host,
                     "last_attempt": attempt,
                     "last_read": prev.get("last_read"),
+                    "last_main": prev.get("last_main"),
                 }
                 async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
                 return
 
-            parsed = parse_status_screen(raw)
             screen = parsed.get("screen")
             # last_read is set whenever we received a recognizable screen (main or menu)
             # or a connected-but-empty session (no_screen). Connect failures keep the
@@ -193,35 +208,114 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "positive_commanded", "positive_reported", "welded",
                     )
                 ),
+                "last_main": prev.get("last_main"),
+                "held": False,
             }
             if screen == "main":
                 for k in (
                     "negative_commanded", "negative_reported",
                     "positive_commanded", "positive_reported", "welded",
                     "internal_status", "internal_allowed", "internal_state",
-                ):
+                ) + SCREEN_EXTRA_KEYS:
                     if k in parsed:
                         state[k] = parsed[k]
+                # v1.3.10: a main screen caught mid-redraw can miss single
+                # contactor lines; carry the previous pole value for up to
+                # TELNET_HOLD_SECONDS instead of flapping to unavailable.
+                held = []
+                prev_main = prev.get("last_main")
+                if prev_main is not None and (attempt - prev_main).total_seconds() <= TELNET_HOLD_SECONDS:
+                    for k in ("negative_commanded", "negative_reported",
+                              "positive_commanded", "positive_reported", "welded"):
+                        if k not in parsed and prev.get(k) is not None:
+                            state[k] = prev[k]
+                            held.append(k)
+                state["fields_held"] = held
+                if held:
+                    state["available"] = True
+                state["last_main"] = attempt
+                _track_runtime(hass, pack, name_lower, parsed.get("runtime_s"), attempt)
             elif screen == "menu":
                 state["internal_status"] = "menu"
                 state["error"] = None
             elif screen == "no_screen":
-                state["internal_status"] = "no_screen"
-                state["available"] = False
+                last_main = prev.get("last_main")
+                if (
+                    last_main is not None
+                    and (attempt - last_main).total_seconds() <= TELNET_HOLD_SECONDS
+                    and (prev.get("screen") == "main" or prev.get("held"))
+                ):
+                    # v1.3.9: hold the last good main-screen values for a few
+                    # minutes instead of flapping to unavailable.
+                    for k, v in prev.items():
+                        if k not in ("last_attempt", "last_read", "error", "screen"):
+                            state[k] = v
+                    state["screen"] = "main"
+                    state["held"] = True
+                    state["held_reason"] = "no_screen"
+                    state["available"] = bool(prev.get("available"))
+                else:
+                    state["internal_status"] = "no_screen"
+                    state["available"] = False
             pack["contactor"] = state
             async_dispatcher_send(hass, SIGNAL_CONTACTOR_UPDATE.format(name_lower))
 
     # First poll shortly after startup; then every TELNET_POLL_SECONDS.
-    async def _first_poll(_now=None):
-        await _poll_contactor()
+    # v1.3.9: stagger the per-pack polls so PP0/PP1/PP2 do not all connect in
+    # the same second.
+    offset = TELNET_POLL_OFFSETS.get(name_lower, 0)
+    unsub_holder: dict = {}
 
-    entry.async_on_unload(
-        async_track_time_interval(
+    async def _start_polling(_now=None):
+        unsub_holder.pop("later", None)
+        await _poll_contactor()
+        unsub_holder["interval"] = async_track_time_interval(
             hass, _poll_contactor, timedelta(seconds=TELNET_POLL_SECONDS)
         )
-    )
-    hass.async_create_task(_first_poll())
+
+    def _cancel_polling():
+        for key in ("later", "interval"):
+            unsub = unsub_holder.pop(key, None)
+            if unsub:
+                unsub()
+
+    entry.async_on_unload(_cancel_polling)
+    unsub_holder["later"] = async_call_later(hass, offset, _start_polling)
     return True
+
+
+def _track_runtime(hass: HomeAssistant, pack: dict, name_lower: str, runtime_s, now) -> None:
+    """Detect an EVTV controller reboot (Runtime went down). Read-only."""
+    if not isinstance(runtime_s, int):
+        return
+    boot = now - timedelta(seconds=runtime_s)
+    prev_rt = pack.get("runtime_last")
+    prev_boot = pack.get("boot_time")
+    pack["runtime_last"] = runtime_s
+    rebooted = False
+    if prev_rt is not None and runtime_s + REBOOT_RUNTIME_SLACK_S < prev_rt:
+        rebooted = True
+    elif prev_boot is not None and (boot - prev_boot).total_seconds() > REBOOT_BOOT_JUMP_S:
+        # Runtime restarted between polls (e.g. a reboot shorter than the gap).
+        rebooted = True
+    # Keep a stable boot time between polls (read timing jitters a few seconds).
+    if prev_boot is None or rebooted:
+        pack["boot_time"] = boot
+    if rebooted:
+        pack["last_reboot"] = boot
+        _LOGGER.warning(
+            "%s: EVTV controller reboot detected (runtime %ss, previous %ss, boot ~%s)",
+            name_lower, runtime_s, prev_rt, boot.isoformat(),
+        )
+        hass.bus.async_fire(
+            EVENT_EVTV_REBOOT,
+            {
+                "pack": name_lower,
+                "runtime_s": runtime_s,
+                "previous_runtime_s": prev_rt,
+                "boot_time": boot.isoformat(),
+            },
+        )
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

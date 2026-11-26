@@ -55,6 +55,7 @@ CLOSED = {
 }
 SYNC_OK = {
     "binary_sensor.powerpacks_in_sync": "on",
+    "binary_sensor.powerpacks_volts_synced": "on",
     "sensor.powerpack1_average_cell": "3.300",
     "sensor.powerpack2_average_cell": "3.300",
     "sensor.powerpacks_volts_last_good_delta": "0.1",
@@ -255,7 +256,19 @@ def test_toggle_socket_generic_send_refused():
         check("toggle key gate", "refused" in str(e).lower(), e)
 
 
+
+def test_close_blocked_when_volts_stale():
+    states = dict(SYNC_OK)
+    states["binary_sensor.powerpacks_volts_synced"] = "off"
+    ok, reason = close_allowed(
+        name_lower="powerpack2", pole="negative", user_initiated=True,
+        states=states, this_contactor=dict(CLOSED, negative_commanded=False, positive_commanded=False),
+        other_contactor=CLOSED,
+    )
+    check("stale sync close blocked", ok is False and "fresh voltage sync" in reason, reason)
+
 if __name__ == "__main__":
+    test_close_blocked_when_volts_stale()
     test_pack_gate()
     test_close_requires_user()
     test_close_blocked_when_out_of_sync_on_bus()

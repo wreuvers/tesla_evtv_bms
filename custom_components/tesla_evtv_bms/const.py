@@ -13,7 +13,7 @@ SIGNAL_OPTIONS_UPDATED = f"{DOMAIN}_{{}}_options"
 SIGNAL_CONTACTOR_UPDATE = f"{DOMAIN}_{{}}_contactor"
 
 # Keep in sync with manifest.json "version" (checked by the offline tests).
-SW_VERSION = "1.3.8"
+SW_VERSION = "1.3.10"
 MANUFACTURER = "EVTV"
 MODEL = "Tesla pack BMS"
 
@@ -34,6 +34,16 @@ DEFAULT_CONTROLLER_HOSTS = {
 TELNET_POLL_SECONDS = 60
 TELNET_LISTEN_SECONDS = 2.5
 TELNET_CONNECT_TIMEOUT = 5.0
+# v1.3.9 no_screen robustness: one retry with a longer receive-only listen,
+# hold the last good main screen for a few minutes, stagger the pack polls.
+TELNET_RETRY_LISTEN_SECONDS = 6.5
+TELNET_HOLD_SECONDS = 180
+TELNET_POLL_OFFSETS = {"powerpack0": 3, "powerpack1": 23, "powerpack2": 43}
+# v1.3.9 reboot detector: Runtime dropped by more than this, or the derived
+# boot time jumped by more than REBOOT_BOOT_JUMP_S.
+REBOOT_RUNTIME_SLACK_S = 30
+REBOOT_BOOT_JUMP_S = 180
+EVENT_EVTV_REBOOT = "tesla_evtv_bms_evtv_reboot"
 
 # v1.3.8: guarded EVTV Gigavac contactors (PP1/PP2 only).
 # Open is blocked if |pack current| exceeds this (amps) unless the Sonoff
@@ -52,7 +62,8 @@ CURRENT_SENSOR = {
     "powerpack2": "sensor.powerpack2_current",
 }
 # Existing HA sync / last_good entities reused for the close-on-bus rule.
-SYNC_IN_SYNC = "binary_sensor.powerpacks_in_sync"
+# v1.3.9: fresh-voltage hysteresis sensor (stale/unknown = not synced).
+SYNC_IN_SYNC = "binary_sensor.powerpacks_volts_synced"
 SYNC_LAST_GOOD_DELTA = "sensor.powerpacks_volts_last_good_delta"
 SYNC_MAX_DIFF = "input_number.battery_sync_max_voltage_diff"
 SYNC_CELL_PP1 = "sensor.powerpack1_average_cell"

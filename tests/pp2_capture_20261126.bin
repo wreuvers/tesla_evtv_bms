@@ -1,0 +1,168 @@
+
+
+================================================================================================================
+**********  EVTV Tesla Model 3/Y Monitor Version ESP32-3.17  Thursday, November 26, 2026  09:57:26   ******
+**********                                 Runtime: 00 Days 02:05:28                                       ******
+================================================================================================================
+******* WIFI STATUS..connected to local Access Point: Little Hog Cay as IP: 192.168.6.97  signal strength: -34 dBm ****
+================================================================================================================
+  Cell 01: 3.535  02: 3.539  03: 3.547  04: 3.545  05: 3.546  06: 3.554  07: 3.555  08:3.566 
+  Cell 09: 3.574  10: 3.579  11: 3.570  12: 3.580  13: 3.595  14: 3.586  15: 3.594  16:3.595 
+  Cell 17: 3.598  18: 3.602  19: 3.595  20: 3.599  21: 3.620  22: 3.599  23: 3.612  24:3.610 
+  Cell 25: 3.617  26: 3.621  27: 3.615  28: 3.624  29: 3.603  30: 3.611  31: 3.625  32:3.620 
+  Cell 33: 3.616  34: 3.618  35: 3.596  36: 3.599  37: 3.588  38: 3.597  39: 3.593  40:3.589 
+  Cell 41: 3.581  42: 3.586  43: 3.580  44: 3.567  45: 3.553  46: 3.551  47: 3.548  48:3.555 
+  Cell 49: 3.556  50: 3.558  51: 3.548  52: 3.558  53: 3.570  54: 3.573  55: 3.582  56:3.591 
+  Cell 57: 3.588  58: 3.596  59: 3.600  60: 3.600  61: 3.598  62: 3.606  63: 3.607  64:3.605 
+  Cell 65: 3.612  66: 3.610  67: 3.612  68: 3.616  69: 3.616  70: 3.612  71: 3.615  72:3.613 
+  Cell 73: 3.616  74: 3.620  75: 3.620  76: 3.619  77: 3.621  78: 3.618  79: 3.613  80:3.608 
+  Cell 81: 3.610  82: 3.602  83: 3.613  84: 3.610  85: 3.609  86: 3.611  87: 3.615  88:3.602 
+  Cell 89: 3.605  90: 3.597  91: 3.600  92: 3.587  93: 3.583  94: 3.577  95: 3.566  96:3.565 
+
+  Summed Voltage:344.510v Average Cell:3.592v High Cell: 3.626v Low Cell: 3.534V 
+
+PACK STATUS:No Faults  
+  Reported Voltage:344.510v Current:-0.218A  Power:-75 watts Temperature:30C
+
+    Capacity:56.5 kWh  Remaining:13.9 kWh  SOC:24.9%  
+      Lifetime Charge:70421.094 kWh  Lifetime Discharge:69958.023 kWh  
+      Max System Discharge Current: -7.79A Max System Charge Current: 26.73A  (z to reset)
+
+  Allowed to close internal contactors: 1  Status: 4 CLOSED
+    Battery Serial Number: рс§?
+
+   12vdc:0.00V
+   HVIL Out: 3.50V   In: 1.20V   Status: OK
+   HVCablesOK: 0  hvilEnable: 1 PyroFuse Voltage: 3.40V
+
+        Negative Contactor:ON  Reported ON    
+        Positive Contactor:ON  Reported ON    
+        Temperature Alarm:OFF  2    Voltage Alarm:OFF 2
+        Charge Enable:ON    Heat Enable:OFF     12v Reported ON
+
+Enter ? for Configuration Menu......
+
+
+
+
+  BMS ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   
+
+HV Chain Model Fault                    Chargeport Fault
+Sleep Wake Aborted                      Chargeport MIA
+Chargeport MIA on HVS                   Drive Inverter MIA
+Limp Mode                               
+
+  ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   
+
+
+
+================================================================================================================
+**********  EVTV Tesla Model 3/Y Monitor Version ESP32-3.17  Thursday, November 26, 2026  09:57:29   ******
+**********                                 Runtime: 00 Days 02:05:30                                       ******
+================================================================================================================
+******* WIFI STATUS..connected to local Access Point: Little Hog Cay as IP: 192.168.6.97  signal strength: -34 dBm ****
+================================================================================================================
+  Cell 01: 3.535  02: 3.538  03: 3.547  04: 3.545  05: 3.546  06: 3.554  07: 3.555  08:3.565 
+  Cell 09: 3.574  10: 3.579  11: 3.570  12: 3.580  13: 3.595  14: 3.585  15: 3.594  16:3.595 
+  Cell 17: 3.597  18: 3.602  19: 3.595  20: 3.598  21: 3.620  22: 3.599  23: 3.612  24:3.610 
+  Cell 25: 3.616  26: 3.621  27: 3.615  28: 3.624  29: 3.603  30: 3.611  31: 3.625  32:3.620 
+  Cell 33: 3.615  34: 3.618  35: 3.596  36: 3.599  37: 3.588  38: 3.597  39: 3.592  40:3.589 
+  Cell 41: 3.581  42: 3.585  43: 3.579  44: 3.567  45: 3.553  46: 3.551  47: 3.548  48:3.555 
+  Cell 49: 3.556  50: 3.558  51: 3.548  52: 3.558  53: 3.570  54: 3.573  55: 3.582  56:3.591 
+  Cell 57: 3.588  58: 3.596  59: 3.600  60: 3.600  61: 3.598  62: 3.606  63: 3.606  64:3.605 
+  Cell 65: 3.612  66: 3.609  67: 3.612  68: 3.616  69: 3.616  70: 3.612  71: 3.615  72:3.613 
+  Cell 73: 3.615  74: 3.620  75: 3.620  76: 3.619  77: 3.621  78: 3.618  79: 3.613  80:3.608 
+  Cell 81: 3.609  82: 3.602  83: 3.613  84: 3.610  85: 3.609  86: 3.611  87: 3.615  88:3.602 
+  Cell 89: 3.605  90: 3.597  91: 3.600  92: 3.587  93: 3.583  94: 3.577  95: 3.566  96:3.564 
+
+  Summed Voltage:344.560v Average Cell:3.592v High Cell: 3.626v Low Cell: 3.534V 
+
+PACK STATUS:No Faults  
+  Reported Voltage:344.560v Current:-0.215A  Power:-74 watts Temperature:30C
+
+    Capacity:56.5 kWh  Remaining:13.9 kWh  SOC:24.9%  
+      Lifetime Charge:70421.094 kWh  Lifetime Discharge:69958.023 kWh  
+      Max System Discharge Current: -7.79A Max System Charge Current: 26.73A  (z to reset)
+
+  Allowed to close internal contactors: 1  Status: 4 CLOSED
+    Battery Serial Number: рс§?
+
+   12vdc:0.00V
+   HVIL Out: 3.50V   In: 1.20V   Status: OK
+   HVCablesOK: 0  hvilEnable: 1 PyroFuse Voltage: 3.40V
+
+        Negative Contactor:ON  Reported ON    
+        Positive Contactor:ON  Reported ON    
+        Temperature Alarm:OFF  2    Voltage Alarm:OFF 2
+        Charge Enable:ON    Heat Enable:OFF     12v Reported ON
+
+Enter ? for Configuration Menu......
+
+
+
+
+  BMS ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   
+
+HV Chain Model Fault                    Chargeport Fault
+Sleep Wake Aborted                      Chargeport MIA
+Chargeport MIA on HVS                   Drive Inverter MIA
+Limp Mode                               
+
+  ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   
+
+
+
+================================================================================================================
+**********  EVTV Tesla Model 3/Y Monitor Version ESP32-3.17  Thursday, November 26, 2026  09:57:31   ******
+**********                                 Runtime: 00 Days 02:05:33                                       ******
+================================================================================================================
+******* WIFI STATUS..connected to local Access Point: Little Hog Cay as IP: 192.168.6.97  signal strength: -34 dBm ****
+================================================================================================================
+  Cell 01: 3.534  02: 3.538  03: 3.547  04: 3.545  05: 3.546  06: 3.554  07: 3.555  08:3.565 
+  Cell 09: 3.574  10: 3.579  11: 3.570  12: 3.580  13: 3.595  14: 3.585  15: 3.594  16:3.595 
+  Cell 17: 3.597  18: 3.602  19: 3.595  20: 3.598  21: 3.620  22: 3.599  23: 3.612  24:3.610 
+  Cell 25: 3.616  26: 3.621  27: 3.614  28: 3.624  29: 3.603  30: 3.611  31: 3.625  32:3.620 
+  Cell 33: 3.615  34: 3.617  35: 3.596  36: 3.599  37: 3.588  38: 3.597  39: 3.592  40:3.589 
+  Cell 41: 3.580  42: 3.585  43: 3.579  44: 3.567  45: 3.553  46: 3.550  47: 3.548  48:3.555 
+  Cell 49: 3.556  50: 3.558  51: 3.548  52: 3.558  53: 3.570  54: 3.573  55: 3.582  56:3.590 
+  Cell 57: 3.587  58: 3.596  59: 3.600  60: 3.600  61: 3.598  62: 3.606  63: 3.606  64:3.605 
+  Cell 65: 3.612  66: 3.609  67: 3.612  68: 3.616  69: 3.615  70: 3.612  71: 3.615  72:3.613 
+  Cell 73: 3.615  74: 3.619  75: 3.620  76: 3.619  77: 3.621  78: 3.618  79: 3.613  80:3.608 
+  Cell 81: 3.609  82: 3.602  83: 3.613  84: 3.610  85: 3.609  86: 3.611  87: 3.615  88:3.602 
+  Cell 89: 3.605  90: 3.597  91: 3.600  92: 3.587  93: 3.583  94: 3.577  95: 3.566  96:3.564 
+
+  Summed Voltage:344.520v Average Cell:3.592v High Cell: 3.626v Low Cell: 3.534V 
+
+PACK STATUS:No Faults  
+  Reported Voltage:344.520v Current:-0.207A  Power:-71 watts Temperature:30C
+
+    Capacity:56.5 kWh  Remaining:13.9 kWh  SOC:24.9%  
+      Lifetime Charge:70421.094 kWh  Lifetime Discharge:69958.023 kWh  
+      Max System Discharge Current: -7.79A Max System Charge Current: 26.73A  (z to reset)
+
+  Allowed to close internal contactors: 1  Status: 4 CLOSED
+    Battery Serial Number: рс§?
+
+   12vdc:0.00V
+   HVIL Out: 3.50V   In: 1.20V   Status: OK
+   HVCablesOK: 0  hvilEnable: 1 PyroFuse Voltage: 3.30V
+
+        Negative Contactor:ON  Reported ON    
+        Positive Contactor:ON  Reported ON    
+        Temperature Alarm:OFF  2    Voltage Alarm:OFF 2
+        Charge Enable:ON    Heat Enable:OFF     12v Reported ON
+
+Enter ? for Configuration Menu......
+
+
+
+
+  BMS ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   
+
+HV Chain Model Fault                    Chargeport Fault
+Sleep Wake Aborted                      Chargeport MIA
+Chargeport MIA on HVS                   Drive Inverter MIA
+Limp Mode                               
+
+  ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   ALERT!   
+

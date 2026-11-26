@@ -53,6 +53,16 @@ _INTERNAL_ALT_RE = re.compile(
     re.IGNORECASE,
 )
 _WELDED_RE = re.compile(r"POSSIBLE\s+WELDED\s+CONTACTOR", re.IGNORECASE)
+# v1.3.9: extra read-only status fields from the same main screen.
+_PACK_STATUS_RE = re.compile(r"PACK\s+STATUS\s*:\s*([^\n\r]*)", re.IGNORECASE)
+_RUNTIME_RE = re.compile(
+    r"Runtime\s*:\s*(\d+)\s*Days?\s+(\d+):(\d{2}):(\d{2})", re.IGNORECASE
+)
+_TEMP_ALARM_RE = re.compile(r"Temperature\s+Alarm\s*:\s*(ON|OFF)", re.IGNORECASE)
+_VOLT_ALARM_RE = re.compile(r"Voltage\s+Alarm\s*:\s*(ON|OFF)", re.IGNORECASE)
+_ALERT_BLOCK_RE = re.compile(
+    r"BMS\s+ALERT!.*?\n(.*?)\n[ \t]*ALERT!", re.IGNORECASE | re.DOTALL
+)
 # Banner of the config screen only — do not use a bare "Configuration Menu"
 # match; the main screen says "Enter ? for Configuration Menu".
 _MENU_BANNER_RE = re.compile(
@@ -129,10 +139,20 @@ def strip_iac(data: bytes) -> bytes:
 
 
 def _last_screen(text: str) -> str:
-    """Return the most recent form-feed delimited screen, if any."""
+    """Return the most recent form-feed delimited screen, if any.
+
+    v1.3.9: prefer the last *complete* main screen (one that reaches the
+    "Enter ? for Configuration Menu" line) so a capture that ends mid-redraw
+    still parses; fall back to the last non-empty segment.
+    """
     if "\x0c" in text:
         parts = [p for p in text.split("\x0c") if p.strip()]
         if parts:
+            for part in reversed(parts):
+                if _MENU_BANNER_RE.search(part):
+                    return part  # controller is on the config menu now
+                if "Enter ? for Configuration Menu" in part and "PACK STATUS" in part.upper():
+                    return part
             return parts[-1]
     return text
 
@@ -203,7 +223,40 @@ def parse_status_screen(payload) -> dict:
             result["internal_status"] = status
             result["internal_state"] = status
 
+    result.update(parse_screen_extras(screen_text))
     return result
+
+
+def parse_screen_extras(screen_text: str) -> dict:
+    """PACK STATUS, Runtime, alarms and the BMS ALERT list (v1.3.9). Read-only."""
+    out: dict = {}
+    m = _PACK_STATUS_RE.search(screen_text)
+    if m:
+        status = " ".join(m.group(1).split())
+        out["pack_status"] = status
+        up = status.upper()
+        out["faulted"] = ("FAULT" in up) and not up.startswith("NO FAULT")
+    m = _RUNTIME_RE.search(screen_text)
+    if m:
+        d, h, mi, se = (int(x) for x in m.groups())
+        out["runtime_s"] = d * 86400 + h * 3600 + mi * 60 + se
+    m = _TEMP_ALARM_RE.search(screen_text)
+    if m:
+        out["temperature_alarm"] = m.group(1).upper() == "ON"
+    m = _VOLT_ALARM_RE.search(screen_text)
+    if m:
+        out["voltage_alarm"] = m.group(1).upper() == "ON"
+    if "PACK STATUS" in screen_text.upper():
+        alerts: list[str] = []
+        blocks = _ALERT_BLOCK_RE.findall(screen_text)
+        if blocks:
+            for line in blocks[-1].splitlines():
+                for item in re.split(r"\s{2,}", line.strip()):
+                    item = item.strip()
+                    if item and "ALERT!" not in item.upper():
+                        alerts.append(item)
+        out["bms_alerts"] = alerts
+    return out
 
 
 def read_telnet_screen(
@@ -234,6 +287,11 @@ def read_telnet_screen(
         sock.close()
     return buf
 
+
+# v1.3.9: extra main-screen fields copied into the per-pack contactor state.
+SCREEN_EXTRA_KEYS = (
+    "pack_status", "faulted", "runtime_s", "temperature_alarm", "voltage_alarm", "bms_alerts",
+)
 
 ALLOWED_TOGGLE_KEYS = {b"1", b"2"}
 

@@ -11,6 +11,7 @@ from .const import (
     PRECHARGE_SECONDS,
     SONOFF_CONNECT,
     SYNC_CELL_MAX_DIFF,
+    SYNC_IN_SYNC,
 )
 
 
@@ -76,6 +77,11 @@ def sync_ok(states: dict) -> tuple[bool, str]:
     in_sync = states.get("binary_sensor.powerpacks_in_sync")
     if in_sync != "on":
         return False, "packs are not in voltage sync (binary_sensor.powerpacks_in_sync is off)"
+    # v1.3.9: also require the fresh-voltage hysteresis sensor (stale or
+    # unknown telemetry counts as NOT synced). Tighter than before, never looser.
+    synced = states.get(SYNC_IN_SYNC)
+    if synced != "on":
+        return False, f"packs are not in fresh voltage sync ({SYNC_IN_SYNC} is {synced or 'missing'})"
 
     a = states.get("sensor.powerpack1_average_cell")
     b = states.get("sensor.powerpack2_average_cell")
