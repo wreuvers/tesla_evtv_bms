@@ -13,7 +13,7 @@ SIGNAL_OPTIONS_UPDATED = f"{DOMAIN}_{{}}_options"
 SIGNAL_CONTACTOR_UPDATE = f"{DOMAIN}_{{}}_contactor"
 
 # Keep in sync with manifest.json "version" (checked by the offline tests).
-SW_VERSION = "1.3.10"
+SW_VERSION = "1.3.11"
 MANUFACTURER = "EVTV"
 MODEL = "Tesla pack BMS"
 
@@ -49,6 +49,17 @@ EVENT_EVTV_REBOOT = "tesla_evtv_bms_evtv_reboot"
 # Open is blocked if |pack current| exceeds this (amps) unless the Sonoff
 # connect path is already off. Close is never allowed from automations.
 CONF_OPEN_CURRENT_MAX = "open_current_max"
+
+# v1.3.11: EVTV low-cell limit (config, not on the parsed CAN frames) and
+# optional manual hours-to-empty cutoff SoC override (None/blank = auto).
+CONF_MIN_CELL_VOLTS = "min_cell_volts"
+CONF_MAX_CELL_VOLTS = "max_cell_volts"
+CONF_CUTOFF_SOC_OVERRIDE = "cutoff_soc_override"
+DEFAULT_MIN_CELL_VOLTS = 3.2
+DEFAULT_MAX_CELL_VOLTS = 4.1
+DEFAULT_PACK_SIZE = 75.0
+DEFAULT_CELLS_SERIES = 96
+
 DEFAULT_OPEN_CURRENT_MAX = 2.0
 PRECHARGE_SECONDS = 10.0
 # Packs that may have EVTV contactor switches (PP0 is read-only).

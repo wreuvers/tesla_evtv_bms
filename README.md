@@ -25,6 +25,15 @@ This custom integration for Home Assistant listens to a UDP port and decodes Tes
   stays read-only. Services: `tesla_evtv_bms.open_contactors` /
   `close_contactors`.
 
+- v1.3.11: hours-to-empty stops at the EVTV min-cell cutoff (the
+  integration's `min_cell_volts` setting, which should match the
+  controller's low-cell limit; that setting is not on the parsed CAN
+  frames). Cutoff SoC is estimated from the live lowest-cell voltage and
+  pack imbalance, or set manually with the optional `cutoff_soc_override`
+  option. The computed value is exposed as `sensor.<pack>_cutoff_soc`.
+  `hours_to_empty` uses only the 10-minute power average (the hourly
+  average no longer overwrites it).
+
 ## Installation (HACS)
 
 1. Go to HACS → Integrations → Custom Repositories

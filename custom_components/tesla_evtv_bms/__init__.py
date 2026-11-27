@@ -330,6 +330,19 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     if pack["config"].get("invert_current") != invert_current:
         pack["config"]["invert_current"] = invert_current
         _LOGGER.info("%s: invert_current set to %s", entry.data["name"], invert_current)
+    from .const import CONF_MIN_CELL_VOLTS, CONF_CUTOFF_SOC_OVERRIDE, DEFAULT_MIN_CELL_VOLTS
+    min_cell = entry.options.get(
+        CONF_MIN_CELL_VOLTS, entry.data.get(CONF_MIN_CELL_VOLTS, DEFAULT_MIN_CELL_VOLTS)
+    )
+    pack["config"]["min_cell_volts"] = min_cell
+    raw_override = entry.options.get(CONF_CUTOFF_SOC_OVERRIDE)
+    if raw_override is None or raw_override == "":
+        pack["config"]["cutoff_soc_override"] = None
+    else:
+        try:
+            pack["config"]["cutoff_soc_override"] = float(raw_override)
+        except (TypeError, ValueError):
+            pack["config"]["cutoff_soc_override"] = None
     # Let the Invert switch (and anything else) refresh its state.
     async_dispatcher_send(hass, SIGNAL_OPTIONS_UPDATED.format(name_lower))
 

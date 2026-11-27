@@ -12,14 +12,17 @@ from .const import (
     DEFAULT_TELNET_PORT,
     CONF_OPEN_CURRENT_MAX,
     DEFAULT_OPEN_CURRENT_MAX,
+    CONF_MIN_CELL_VOLTS,
+    CONF_MAX_CELL_VOLTS,
+    CONF_CUTOFF_SOC_OVERRIDE,
+    DEFAULT_MIN_CELL_VOLTS,
+    DEFAULT_MAX_CELL_VOLTS,
+    DEFAULT_PACK_SIZE,
+    DEFAULT_CELLS_SERIES,
     default_controller_host,
 )
 
 DEFAULT_PORT = 6850
-DEFAULT_PACK_SIZE = 75.0
-DEFAULT_CELLS_SERIES = 96
-DEFAULT_MIN_VOLTS = 3.2
-DEFAULT_MAX_VOLTS = 4.1
 
 
 class TeslaEVTVBMSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -41,8 +44,8 @@ class TeslaEVTVBMSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PORT, default=DEFAULT_PORT): vol.Coerce(int),
                 vol.Required("pack_size", default=DEFAULT_PACK_SIZE): vol.Coerce(float),
                 vol.Required("cells_in_series", default=DEFAULT_CELLS_SERIES): vol.Coerce(int),
-                vol.Required("min_cell_volts", default=DEFAULT_MIN_VOLTS): vol.Coerce(float),
-                vol.Required("max_cell_volts", default=DEFAULT_MAX_VOLTS): vol.Coerce(float),
+                vol.Required(CONF_MIN_CELL_VOLTS, default=DEFAULT_MIN_CELL_VOLTS): vol.Coerce(float),
+                vol.Required(CONF_MAX_CELL_VOLTS, default=DEFAULT_MAX_CELL_VOLTS): vol.Coerce(float),
                 vol.Optional(CONF_INVERT_CURRENT, default=DEFAULT_INVERT_CURRENT): bool,
                 vol.Optional(CONF_HOST, default=""): str,
                 vol.Optional(CONF_TELNET_PORT, default=DEFAULT_TELNET_PORT): vol.Coerce(int),
@@ -81,6 +84,13 @@ class TeslaEVTVBMSOptionsFlow(config_entries.OptionsFlow):
             CONF_OPEN_CURRENT_MAX,
             self.config_entry.data.get(CONF_OPEN_CURRENT_MAX, DEFAULT_OPEN_CURRENT_MAX),
         )
+        min_cell = self.config_entry.options.get(
+            CONF_MIN_CELL_VOLTS,
+            self.config_entry.data.get(CONF_MIN_CELL_VOLTS, DEFAULT_MIN_CELL_VOLTS),
+        )
+        override = self.config_entry.options.get(CONF_CUTOFF_SOC_OVERRIDE, "")
+        if override is None:
+            override = ""
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
@@ -88,5 +98,7 @@ class TeslaEVTVBMSOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(CONF_HOST, default=host or ""): str,
                 vol.Optional(CONF_TELNET_PORT, default=int(telnet_port)): vol.Coerce(int),
                 vol.Optional(CONF_OPEN_CURRENT_MAX, default=float(open_max)): vol.Coerce(float),
+                vol.Optional(CONF_MIN_CELL_VOLTS, default=float(min_cell)): vol.Coerce(float),
+                vol.Optional(CONF_CUTOFF_SOC_OVERRIDE, default=str(override)): str,
             }),
         )

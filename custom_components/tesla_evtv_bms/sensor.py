@@ -1,5 +1,9 @@
 """Tesla EVTV BMS sensors.
 
+v1.3.11: hours-to-empty subtracts cutoff SoC (from min_cell_volts and
+live imbalance, or cutoff_soc_override). Only the 10-min average
+updates hours_to_empty / summary.
+
 v1.3.7: also creates diagnostic internal-contactor status and last-read
 timestamp sensors (read-only telnet). Unique ids of v1.3.6 sensors are
 unchanged.
@@ -37,7 +41,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SIGNAL_UPDATE_ENTITY, SIGNAL_CONTACTOR_UPDATE, pack_device_info
+from .const import (
+    DOMAIN, SIGNAL_UPDATE_ENTITY, SIGNAL_CONTACTOR_UPDATE, pack_device_info,
+    CONF_MIN_CELL_VOLTS, CONF_CUTOFF_SOC_OVERRIDE, DEFAULT_MIN_CELL_VOLTS,
+    DEFAULT_PACK_SIZE, DEFAULT_CELLS_SERIES,
+)
+from .cutoff import estimate_cutoff_soc
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +81,8 @@ SENSOR_TYPES = {
     "power_hourly_average": "W",
     "hours_to_empty": "h",
     "hours_to_full": "h",
+    "cutoff_soc": "%",
+    "min_cell_setting": "V",
     "summary": "",
 }
 
@@ -98,6 +109,8 @@ ICON_MAP = {
     "power_hourly_average": "mdi:chart-timeline-variant",
     "hours_to_empty": "mdi:battery-alert",
     "hours_to_full": "mdi:battery-clock",
+    "cutoff_soc": "mdi:battery-low",
+    "min_cell_setting": "mdi:battery-arrow-down",
     "summary": "mdi:clock-outline",
 }
 
@@ -107,10 +120,11 @@ METER_KEYS = tuple(f"{b}_{p}" for b in ENERGY_BASES for p in METER_PERIODS)
 MAX_INTEGRATION_GAP_S = 60.0
 
 VOLTAGE_KEYS = ("volts", "lowest_cell", "highest_cell", "average_cell", "cell_difference",
-                "trigger_cell_voltage", "freq_shift_volts")
+                "trigger_cell_voltage", "freq_shift_volts", "min_cell_setting")
 POWER_KEYS = ("power", "charge", "discharge", "power_average", "power_hourly_average")
 MEASUREMENT_KEYS = VOLTAGE_KEYS + POWER_KEYS + (
-    "current", "tcch_amps", "state_of_charge", "available_energy", "hours_to_empty", "hours_to_full")
+    "current", "tcch_amps", "state_of_charge", "available_energy", "hours_to_empty", "hours_to_full",
+    "cutoff_soc")
 TEXT_KEYS = ("battery_status", "summary")
 
 
@@ -188,16 +202,55 @@ def integrate_power(coordinator: dict, power, now_mono: float, now: datetime) ->
     energy["last_power"] = power if isinstance(power, (int, float)) else None
 
 
+
+def _parse_override(val):
+    """Blank / missing option means auto-compute cutoff SoC."""
+    if val is None or val == "":
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _entry_pack_config(entry: ConfigEntry) -> dict:
+    """Pack sizing and cutoff settings from the config entry (options win)."""
+    data, opts = entry.data, entry.options
+    return {
+        "pack_size": data.get("pack_size", DEFAULT_PACK_SIZE),
+        "cells_in_series": data.get("cells_in_series", DEFAULT_CELLS_SERIES),
+        "min_cell_volts": opts.get(
+            CONF_MIN_CELL_VOLTS, data.get(CONF_MIN_CELL_VOLTS, DEFAULT_MIN_CELL_VOLTS)
+        ),
+        "max_cell_volts": data.get("max_cell_volts", 4.1),
+        "cutoff_soc_override": _parse_override(opts.get(CONF_CUTOFF_SOC_OVERRIDE)),
+    }
+
+
+def _refresh_cutoff(coordinator: dict) -> None:
+    """Update cutoff_soc from the EVTV min-cell setting and live cells."""
+    config = coordinator["config"]
+    v = coordinator["values"]
+    cutoff = estimate_cutoff_soc(
+        v_min=v.get("lowest_cell"),
+        v_avg=v.get("average_cell"),
+        soc=v.get("state_of_charge"),
+        v_cut=config.get("min_cell_volts", DEFAULT_MIN_CELL_VOLTS),
+        override=config.get("cutoff_soc_override"),
+        cells_in_series=config.get("cells_in_series"),
+    )
+    v["cutoff_soc"] = round(float(cutoff), 1)
+    try:
+        v["min_cell_setting"] = round(float(config.get("min_cell_volts", DEFAULT_MIN_CELL_VOLTS)), 3)
+    except (TypeError, ValueError):
+        v["min_cell_setting"] = DEFAULT_MIN_CELL_VOLTS
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     name = entry.data["name"].lower()
     title = entry.data["name"]
 
-    pack_config = {
-        "pack_size": entry.data.get("pack_size", 22.0),
-        "cells_in_series": entry.data.get("cells_in_series", 96),
-        "min_cell_volts": entry.data.get("min_cell_volts", 3.0),
-        "max_cell_volts": entry.data.get("max_cell_volts", 4.2),
-    }
+    pack_config = _entry_pack_config(entry)
 
     coordinator = hass.data.setdefault(DOMAIN, {}).setdefault(name, {
         "entities": {},
@@ -251,6 +304,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         if isinstance(soc, (int, float)):
             v["available_energy"] = round(pack_size * soc / 100, 2)
+            _refresh_cutoff(coordinator)
 
         if isinstance(current, (int, float)):
             if current > 1:
@@ -312,40 +366,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
             avg = sum(samples) / len(samples)
             coordinator["values"][interval_key] = round(avg, 1)
+            keys_to_write = [interval_key]
 
-            status = coordinator["values"].get("battery_status", "")
-            available_energy = coordinator["values"].get("available_energy", 0)
-            if not isinstance(available_energy, (int, float)):
-                available_energy = 0
-            pack_size = coordinator["config"]["pack_size"]
+            # Hours / summary follow the 10-min average only. The hourly
+            # updater used to overwrite the same hours_to_empty sensor.
+            if interval_key == "power_average":
+                _refresh_cutoff(coordinator)
+                status = coordinator["values"].get("battery_status", "")
+                available_energy = coordinator["values"].get("available_energy", 0)
+                if not isinstance(available_energy, (int, float)):
+                    available_energy = 0
+                pack_size = coordinator["config"]["pack_size"]
+                cutoff_soc = coordinator["values"].get("cutoff_soc", 0)
+                try:
+                    cutoff_soc = float(cutoff_soc)
+                except (TypeError, ValueError):
+                    cutoff_soc = 0.0
+                usable = max(available_energy - pack_size * max(cutoff_soc, 0.0) / 100.0, 0.0)
 
-            if abs(avg) > 0:
-                if status == "Discharging":
-                    coordinator["values"]["hours_to_empty"] = round(available_energy / (abs(avg) / 1000), 2)
-                    coordinator["values"]["hours_to_full"] = 0
-                elif status == "Charging":
-                    coordinator["values"]["hours_to_empty"] = 0
-                    coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (abs(avg) / 1000), 2)
+                if abs(avg) > 0:
+                    if status == "Discharging":
+                        coordinator["values"]["hours_to_empty"] = round(usable / (abs(avg) / 1000), 2)
+                        coordinator["values"]["hours_to_full"] = 0
+                    elif status == "Charging":
+                        coordinator["values"]["hours_to_empty"] = 0
+                        coordinator["values"]["hours_to_full"] = round((pack_size - available_energy) / (abs(avg) / 1000), 2)
+                    else:
+                        coordinator["values"]["hours_to_empty"] = 0
+                        coordinator["values"]["hours_to_full"] = 0
                 else:
                     coordinator["values"]["hours_to_empty"] = 0
                     coordinator["values"]["hours_to_full"] = 0
-            else:
-                coordinator["values"]["hours_to_empty"] = 0
-                coordinator["values"]["hours_to_full"] = 0
 
-            # Summary Sensor Logic
-            summary_value = "Idle"
-            if status == "Discharging":
-                hrs = coordinator["values"]["hours_to_empty"]
-                hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
-                summary_value = f"{hrs_str} hrs to Empty"
-            elif status == "Charging":
-                hrs = coordinator["values"]["hours_to_full"]
-                hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
-                summary_value = f"{hrs_str} hrs to Full"
-            coordinator["values"]["summary"] = summary_value
+                summary_value = "Idle"
+                if status == "Discharging":
+                    hrs = coordinator["values"]["hours_to_empty"]
+                    hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
+                    summary_value = f"{hrs_str} hrs to Empty"
+                elif status == "Charging":
+                    hrs = coordinator["values"]["hours_to_full"]
+                    hrs_str = f"{hrs:.1f}" if hrs < 10 else f"{int(hrs)}"
+                    summary_value = f"{hrs_str} hrs to Full"
+                coordinator["values"]["summary"] = summary_value
+                keys_to_write.extend(("hours_to_empty", "hours_to_full", "summary", "cutoff_soc", "min_cell_setting"))
 
-            for key in (interval_key, "hours_to_empty", "hours_to_full", "summary"):
+            for key in keys_to_write:
                 ent = coordinator["entities"].get(key)
                 if ent is not None and ent.hass is not None:
                     ent.async_write_ha_state()
@@ -431,7 +496,7 @@ class TeslaEvtvSensor(RestoreSensor):
             return SensorDeviceClass.CURRENT
         if k in POWER_KEYS:
             return SensorDeviceClass.POWER
-        if k == "state_of_charge":
+        if k in ("state_of_charge", "cutoff_soc"):
             return SensorDeviceClass.BATTERY
         return None
 

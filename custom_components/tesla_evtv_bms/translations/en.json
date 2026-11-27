@@ -9,7 +9,7 @@
           "port": "UDP port",
           "pack_size": "Pack size (kWh)",
           "cells_in_series": "Cells in series",
-          "min_cell_volts": "Min cell volts",
+          "min_cell_volts": "EVTV min cell volts (controller low-cell cutoff)",
           "max_cell_volts": "Max cell volts",
           "invert_current": "Invert current sign (use if charging shows negative)",
           "host": "Controller IP (telnet, optional)",
@@ -26,7 +26,9 @@
           "invert_current": "Invert current sign (use if charging shows negative)",
           "host": "Controller IP (telnet, optional)",
           "telnet_port": "Telnet port (optional, default 23)",
-          "open_current_max": "Max |current| (A) allowed when opening contactors (Sonoff-off bypasses this)"
+          "open_current_max": "Max |current| (A) allowed when opening contactors (Sonoff-off bypasses this)",
+          "min_cell_volts": "EVTV min cell volts (controller low-cell cutoff)",
+          "cutoff_soc_override": "Hours-to-empty cutoff SoC % (blank = auto from min cell + imbalance)"
         }
       }
     }
